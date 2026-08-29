@@ -1622,7 +1622,7 @@ function shareGridExport(emojis){
     // 补位的空格子什么都不画，露出卡片的纸底 —— ins 个人页最后一行没排满时
     // 就是这样。填个灰块会变成一个显眼的"洞"，比留白难看得多。
     const cell = e
-      ? `<div data-bg-url="${esc(e.url)}" style="position:absolute; top:1.5px; right:1.5px; bottom:1.5px; left:1.5px; background-color:#EFEDE8; background-image:url('${cssUrlSafe(e.url)}'); background-size:cover; background-position:center;"></div>`
+      ? `<div data-bg-url="${esc(e.url)}" style="position:absolute; top:1.5px; right:1.5px; bottom:1.5px; left:1.5px; background-color:#ECEFF2; background-image:url('${cssUrlSafe(e.url)}'); background-size:cover; background-position:center;"></div>`
       : '';
     return `<div style="float:left; width:${side}%; padding-top:${side}%; position:relative;">${cell}</div>`;
   }).join('');
@@ -1632,11 +1632,11 @@ function shareGridExport(emojis){
 function shareAvatarExport(src, fallbackChar, size){
   const box = `width:${size}px; height:${size}px; border-radius:50%;`;
   if(src){
-    return `<div data-bg-url="${esc(src)}" style="${box} background-color:#EDEDED; background-image:url('${cssUrlSafe(src)}'); background-size:cover; background-position:center;"></div>`;
+    return `<div data-bg-url="${esc(src)}" style="${box} background-color:#E8EBEE; background-image:url('${cssUrlSafe(src)}'); background-size:cover; background-position:center;"></div>`;
   }
   // 没头像就拿昵称首字占位。垂直居中用 line-height 而不是 flex：
   // html2canvas 对 flex 的垂直居中偶尔会差几个像素，line-height 不会。
-  return `<div style="${box} background:#EDEDED; color:#AAA; font-size:${Math.round(size*0.42)}px; font-weight:600; line-height:${size}px; text-align:center;">${esc(fallbackChar||'?')}</div>`;
+  return `<div style="${box} background:#E8EBEE; color:#A6ACB2; font-size:${Math.round(size*0.42)}px; font-weight:600; line-height:${size}px; text-align:center;">${esc(fallbackChar||'?')}</div>`;
 }
 // 卡片落款的小标记：两张叠在一起的贴纸 + 一张脸。描边粗细、圆头线帽跟页面里
 // 其它图标保持一致；stroke 必须写死颜色，html2canvas 序列化 SVG 时不解析
@@ -1662,12 +1662,14 @@ function buildFontShareCardNode(f){
 /* ---- 表情包分享卡片：按印刷品排，不是照抄 app 界面 ---- */
 // 上一版是把 ins 个人页原样搬过来（大头像 + 通栏九宫格 + 一行统计），结果就是
 // 一张"截图"，很平庸。这版当成一页杂志来做：
-//   · 纸一样的暖白底 + 一圈极细的边，先从"屏幕"里跳出来；
+//   · 纸一样的冷白底 + 一圈极细的边，先从"屏幕"里跳出来；
 //   · 九宫格往里收，四周留白，像画册里的一版图，而不是顶到边的列表；
 //   · 顶上是报头（标记 + 大字距的 YOWW），底下是编号和日期，中间大标题；
-//   · 标签不再做成 UI 里那种胶囊，改成「／」分隔的一行小字，安静得多。
+//   · 标签不再做成 UI 里那种胶囊，改成竖线分隔的一行小字，安静得多。
 // 留白和克制比多加元素更贵，所以这版元素反而更少。
-const CARD_PAPER='#FAF9F6', CARD_RULE='#E6E1D8', CARD_INK='#1A1A1A', CARD_FAINT='#A9A49B', CARD_DIM='#8C877E';
+// 冷白：每个值都是 R<G<B（偏蓝灰）。之前那套是 R>G>B 的暖白（米黄调），
+// 换的时候整组一起换，只改纸底不改线和字的话，灰色会显出脏黄。
+const CARD_PAPER='#F9FAFB', CARD_RULE='#E4E7EA', CARD_INK='#15181C', CARD_FAINT='#A6ACB2', CARD_DIM='#868D94';
 // 正文明朝体：拉丁用内嵌的 Shippori Mincho，中文接中文宋体。这里绝不能放
 // 「Hiragino Mincho」这类日文明朝 —— 它没有「发」「疯」这些简体字，会导致一个
 // 标题里一半日文字形一半中文字体。列的全是简体中文衬线，覆盖一致。
@@ -1676,7 +1678,10 @@ function buildCollShareCardNode(c){
   const avatarSrc = (c.authorId===currentUserId) ? (getMyHdAvatar() || avatarDataUrl) : c.authorAvatarUrl;
   const avatar = shareAvatarExport(avatarSrc, String(c.author||'?').slice(0,1), 22);
   const tags = asArray(c.tags).slice(0, 4);
-  const tagLine = tags.length ? `<div style="margin-top:13px; font-size:10px; letter-spacing:.1em; line-height:1.8; color:${CARD_DIM};">${tags.map(esc).join(' ／ ')}</div>` : '';
+  // 竖线比标签本身再浅一档，分隔符退到背景里，读起来是「标签 标签 标签」而不是
+  // 「标签|标签|标签」
+  const tagSep = `<span style="color:${CARD_FAINT};"> | </span>`;
+  const tagLine = tags.length ? `<div style="margin-top:13px; font-size:10px; letter-spacing:.1em; line-height:1.8; color:${CARD_DIM};">${tags.map(esc).join(tagSep)}</div>` : '';
   const n = c.emojis.length;
   const d = new Date(c.createdAt);
   const dateStr = isFinite(d.getTime()) ? `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,'0')}` : '';
