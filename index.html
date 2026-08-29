@@ -1148,8 +1148,12 @@ async function createCollectionRemote(title, category, items, source){
     await rollback();
     let memberCheck = 'query failed';
     try{ const r = await sb.rpc('is_member'); memberCheck = JSON.stringify(r); }catch(e){ memberCheck = 'exception: '+e.message; }
+    let realAuthId = 'query failed';
+    try{ const { data: ud, error: uerr } = await sb.auth.getUser(); realAuthId = uerr ? ('error: '+uerr.message) : (ud?.user?.id || 'null'); }catch(e){ realAuthId = 'exception: '+e.message; }
     alert('DEBUG image_assets insert error:\n'+JSON.stringify(aErr, null, 2)
-      +'\n\ncurrentUserId = '+currentUserId
+      +'\n\ncurrentUserId (JS变量) = '+currentUserId
+      +'\nauth.getUser() 真实id = '+realAuthId
+      +'\n两者是否一致 = '+(currentUserId===realAuthId)
       +'\nis_member() via rpc = '+memberCheck);
     showToast('图片保存失败：'+aErr.message); return false;
   }
@@ -1181,8 +1185,12 @@ async function updateCollectionRemote(id, title, category, items, source){
   if(aErr){
     let memberCheck = 'query failed';
     try{ const r = await sb.rpc('is_member'); memberCheck = JSON.stringify(r); }catch(e){ memberCheck = 'exception: '+e.message; }
+    let realAuthId = 'query failed';
+    try{ const { data: ud, error: uerr } = await sb.auth.getUser(); realAuthId = uerr ? ('error: '+uerr.message) : (ud?.user?.id || 'null'); }catch(e){ realAuthId = 'exception: '+e.message; }
     alert('DEBUG image_assets insert error:\n'+JSON.stringify(aErr, null, 2)
-      +'\n\ncurrentUserId = '+currentUserId
+      +'\n\ncurrentUserId (JS变量) = '+currentUserId
+      +'\nauth.getUser() 真实id = '+realAuthId
+      +'\n两者是否一致 = '+(currentUserId===realAuthId)
       +'\nis_member() via rpc = '+memberCheck);
     showToast('图片保存失败：'+aErr.message); return false;
   }
