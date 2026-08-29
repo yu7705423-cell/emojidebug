@@ -1650,15 +1650,6 @@ function yowwMarkSvg(size){
     + `<path d="M7.9 15.6c.5 1.05 1.25 1.6 2.1 1.6s1.6-.55 2.1-1.6"/>`
     + `</svg>`;
 }
-function buildFontShareCardNode(f){
-  return shareCardWrap(`
-    ${fontCanvasHtml(f, false)}
-    <div style="padding:16px 18px 20px;">
-      <div style="font-family:'Yoww Display',-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif; font-weight:500; letter-spacing:.02em; font-size:17px; color:#000;">${esc(f.name)}</div>
-      <div style="font-size:11.5px; color:#999; margin-top:4px;">${esc(f.author_nickname||'')} · Yoww</div>
-    </div>
-  `);
-}
 /* ---- 表情包分享卡片：按印刷品排，不是照抄 app 界面 ---- */
 // 上一版是把 ins 个人页原样搬过来（大头像 + 通栏九宫格 + 一行统计），结果就是
 // 一张"截图"，很平庸。这版当成一页杂志来做：
@@ -1710,6 +1701,64 @@ function buildCollShareCardNode(c){
       <div style="margin-top:14px;">${rule}</div>
       <div style="position:relative; height:17px; margin-top:10px;">
         <div style="font-family:${CARD_SERIF}; font-size:14px; letter-spacing:.06em; line-height:17px; color:${CARD_INK};">${String(n).padStart(2,'0')}<span style="font-size:9.5px; letter-spacing:.14em; color:${CARD_FAINT};"> 个表情</span></div>
+        <div style="position:absolute; right:0; top:0; font-size:9.5px; letter-spacing:.14em; line-height:17px; color:${CARD_FAINT};">${esc(dateStr)}</div>
+      </div>
+
+    </div>
+  `, 358, `background:${CARD_PAPER}; border:1px solid ${CARD_RULE}; border-radius:14px;`);
+}
+
+/* ---- 字体分享卡片：按「书摘卡」排 ---- */
+// 字体卡片要展示的本来就是"一段排得好看的字"，跟书摘卡是同一件事，所以不套
+// 表情包那版的九宫格结构，单独排一版：一对引号 + 一段大字 + 下面署名。
+//   · 正文用这款字体本身渲染。ensureFontFace 负责把 @font-face 挂上去，
+//     renderCardToBlob 截图前有 await document.fonts.ready，所以一定等得到，
+//     不会截出一张回退字体的图。
+//   · 作者给字体设的底色/底图当成书摘的那"一页"，卡片外壳仍是冷白 —— 两层套着，
+//     作者挑的颜色再跳也只影响里面那一页，不会把整张卡搞乱。
+function buildFontShareCardNode(f){
+  const family = ensureFontFace(f);
+  const bgUrl = f.bg_image ? cssUrlSafe(f.bg_image) : '';
+  // 跟 fontCanvasHtml 一样：bg_color 会直接进 style 属性，必须按颜色格式校验，
+  // 否则一条记录就能用分号闭合属性注入样式
+  const bgColor = safeCssColor(f.bg_color, '#FFFFFF');
+  const onDark = !!bgUrl || isDarkColor(bgColor);
+  const pageBg = bgUrl ? `background:url('${bgUrl}') center/cover;` : `background:${bgColor};`;
+  const pageAttr = bgUrl ? ` data-bg-url="${esc(f.bg_image)}"` : '';
+  const textColor = onDark ? '#FFFFFF' : CARD_INK;
+  const quoteColor = onDark ? 'rgba(255,255,255,.42)' : '#C9CED3';
+
+  const passage = String(f.display_text || f.name || '');
+  // 字号按正文长短重定。作者设的 font_size 是给 app 里整屏预览用的（上限 200），
+  // 原样搬到 358 宽的卡片上会直接顶出去。
+  const len = Array.from(passage).length;
+  const size = len<=8 ? 29 : len<=16 ? 24 : len<=32 ? 19 : 16;
+  const spacing = clampNum(f.letter_spacing, -1, 6, 0);
+  const align = f.text_align==='left' ? 'left' : f.text_align==='right' ? 'right' : 'center';
+
+  const d = new Date(f.created_at);
+  const dateStr = isFinite(d.getTime()) ? `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,'0')}` : '';
+  const rule = `<div style="height:1px; background:${CARD_RULE};"></div>`;
+  const sep = `<span style="color:${CARD_FAINT};"> | </span>`;
+  return shareCardWrap(`
+    <div style="padding:23px 22px 18px;">
+
+      <div style="position:relative; height:14px; margin-bottom:11px;">
+        <div style="position:absolute; left:0; top:0;">${yowwMarkSvg(13)}</div>
+        <div style="margin-left:19px; font-family:${CARD_SERIF}; font-size:10px; letter-spacing:.24em; line-height:14px; color:${CARD_INK};">YOWW</div>
+        <div style="position:absolute; right:0; top:0; font-size:9px; letter-spacing:.16em; line-height:14px; color:${CARD_FAINT};">${esc(f.category||'字体')}</div>
+      </div>
+      ${rule}
+
+      <div${pageAttr} style="position:relative; margin-top:17px; padding:34px 24px 36px; min-height:92px; ${pageBg}">
+        <div style="position:absolute; left:11px; top:11px; font-family:${CARD_SERIF}; font-size:25px; line-height:1; color:${quoteColor};">「</div>
+        <div style="position:absolute; right:11px; bottom:13px; font-family:${CARD_SERIF}; font-size:25px; line-height:1; color:${quoteColor};">」</div>
+        <div style="font-family:'${family}',${CARD_SERIF}; font-size:${size}px; letter-spacing:${spacing}px; line-height:1.85; text-align:${align}; color:${textColor}; overflow-wrap:break-word;">${esc(passage)}</div>
+      </div>
+
+      <div style="margin-top:16px;">${rule}</div>
+      <div style="position:relative; height:17px; margin-top:10px;">
+        <div style="font-family:${CARD_SERIF}; font-size:13px; letter-spacing:.04em; line-height:17px; color:${CARD_INK};">《${esc(f.name)}》${f.author_nickname?sep+`<span style="font-size:10px; letter-spacing:.06em; color:${CARD_DIM};">${esc(f.author_nickname)}</span>`:''}</div>
         <div style="position:absolute; right:0; top:0; font-size:9.5px; letter-spacing:.14em; line-height:17px; color:${CARD_FAINT};">${esc(dateStr)}</div>
       </div>
 
