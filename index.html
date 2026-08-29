@@ -1511,7 +1511,7 @@ function waitForCardImages(node){
       img.addEventListener('error', resolve, {once:true});
     });
   });
-  // 用 background-image 画的格子（见 coverHtmlExport / fontCanvasHtml 的背景图）
+  // 用 background-image 画的格子（见 shareGridExport / fontCanvasHtml 的背景图）
   // 不会触发 <img> 的 load 事件，得单独用 Image() 预热一遍再截图，
   // 否则 html2canvas 经常正好赶上还没解码完，截出来是空的。
   const bgEls = Array.from(node.querySelectorAll('[data-bg-url]'));
@@ -1548,9 +1548,9 @@ async function shareOrDownloadImageBlob(blob, filename, title){
   setTimeout(()=>URL.revokeObjectURL(url), 4000);
   showToast('图片已生成，可长按保存');
 }
-function shareCardWrap(innerHtml){
+function shareCardWrap(innerHtml, width){
   const wrap = document.createElement('div');
-  wrap.style.cssText = 'position:absolute; top:0; left:-9999px; width:300px; background:#fff; border-radius:20px; overflow:hidden; font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",Arial,sans-serif;';
+  wrap.style.cssText = `position:absolute; top:0; left:-9999px; width:${width||300}px; background:#fff; border-radius:20px; overflow:hidden; font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",Arial,sans-serif;`;
   wrap.innerHTML = innerHtml;
   return wrap;
 }
@@ -1583,30 +1583,56 @@ function openShareSheet(opts){
     $('shareSheetMask').classList.remove('open');
   });
 }
-// html2canvas（本地那份 1.4.1）不认识 CSS 的 aspect-ratio，也不认识 <img> 的
-// object-fit:cover —— 页面里正常显示时靠这两个属性把不同尺寸的图裁成统一方块，
-// 但截图生成分享卡片时这两个属性都不生效，方块就变回图片原始比例，
-// 于是几张大小不一的图拼出来就一个大一个小。分享卡片专用这个版本：
-// 外层用 padding-top:100% 撑出正方形（纯百分比 padding，不依赖 aspect-ratio），
-// 每格图片改用 background-image + background-size:cover（html2canvas 支持
-// background-size，因为它本来就要处理页面背景），从根源上绕开这两个坑。
-function coverCellExport(e){
-  if(!e) return `<div style="width:100%; height:100%; background:#F7F7F7;"></div>`;
-  const url = cssUrlSafe(e.url);
-  return `<div data-bg-url="${esc(e.url)}" style="width:100%; height:100%; background-color:#F7F7F7; background-image:url('${url}'); background-size:cover; background-position:center;"></div>`;
+/* ---- 分享卡片：仿 Instagram 个人页的九宫格排布 ---- */
+// html2canvas（本地那份 1.4.1）不认识 CSS 的 aspect-ratio，不认识 <img> 的
+// object-fit:cover，也不认识 flex / grid 的 gap —— 页面里正常显示时靠这些属性
+// 把不同尺寸的图裁成统一方块，但截图生成分享卡片时全都不生效，方块会变回图片
+// 原始比例，于是几张大小不一的图拼出来就一个大一个小。所以卡片这边一律用最
+// 老派、最不会出意外的写法：
+//   · 格子用 float + 百分比 padding-top 撑正方形（纯盒模型换算，历史悠久）；
+//   · 图片用 background-image + background-size:cover 裁切（html2canvas 本来
+//     就要处理页面背景，这条支持得很好）；
+//   · 格子之间的缝用内层元素四边各让 1px 做出来，不依赖 gap。
+// 每格数量按内容多少自适应：够 5 张就铺成 ins 那样的 3×2，不够就退成 2×2 /
+// 一行 3 张 / 一行 2 张 / 单张大图，避免出现一大片空格子。
+const SHARE_GRID_LAYOUTS = { 0:[1,1], 1:[1,1], 2:[2,1], 3:[3,1], 4:[2,2], 5:[3,2], 6:[3,2] };
+function shareGridExport(emojis){
+  const list = (emojis||[]).slice(0, 6);
+  const [cols, rows] = SHARE_GRID_LAYOUTS[list.length] || [3,2];
+  const cells = list.slice(0, cols*rows);
+  while(cells.length < cols*rows) cells.push(null);
+  const side = (100/cols).toFixed(4);
+  const inner = cells.map(e=>{
+    // 补位的空格子什么都不画，露出卡片本身的白底 —— ins 个人页最后一行没排满
+    // 时就是这样。填个浅灰会变成一个显眼的"洞"，比留白难看得多。
+    const cell = e
+      ? `<div data-bg-url="${esc(e.url)}" style="position:absolute; top:1px; right:1px; bottom:1px; left:1px; background-color:#F2F2F2; background-image:url('${cssUrlSafe(e.url)}'); background-size:cover; background-position:center;"></div>`
+      : '';
+    return `<div style="float:left; width:${side}%; padding-top:${side}%; position:relative;">${cell}</div>`;
+  }).join('');
+  // overflow:hidden 兼当 clearfix，把浮动的格子重新包回盒子里
+  return `<div style="overflow:hidden; background:#FFFFFF;">${inner}</div>`;
 }
-function coverHtmlExport(emojis){
-  const imgs = (emojis||[]).slice(0,4);
-  let inner;
-  if(imgs.length<=1){
-    inner = `<div style="width:100%; height:100%;">${imgs[0]?coverCellExport(imgs[0]):''}</div>`;
-  } else if(imgs.length===2){
-    inner = `<div style="width:100%; height:100%; display:flex; gap:1px;">${imgs.map(e=>`<div style="flex:1; height:100%;">${coverCellExport(e)}</div>`).join('')}</div>`;
-  } else {
-    const cells = imgs.slice(0,4); while(cells.length<4) cells.push(null);
-    inner = `<div style="width:100%; height:100%; display:grid; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr; gap:1px;">${cells.map(e=>`<div>${coverCellExport(e)}</div>`).join('')}</div>`;
+function shareAvatarExport(src, fallbackChar, size){
+  const box = `width:${size}px; height:${size}px; border-radius:50%;`;
+  if(src){
+    return `<div data-bg-url="${esc(src)}" style="${box} background-color:#EDEDED; background-image:url('${cssUrlSafe(src)}'); background-size:cover; background-position:center;"></div>`;
   }
-  return `<div style="width:100%; padding-top:100%; position:relative; overflow:hidden; background:#EDEDED;"><div style="position:absolute; inset:0;">${inner}</div></div>`;
+  // 没头像就拿昵称首字占位。垂直居中用 line-height 而不是 flex：
+  // html2canvas 对 flex 的垂直居中偶尔会差几个像素，line-height 不会。
+  return `<div style="${box} background:#EDEDED; color:#AAA; font-size:${Math.round(size*0.42)}px; font-weight:600; line-height:${size}px; text-align:center;">${esc(fallbackChar||'?')}</div>`;
+}
+// 卡片落款的小标记：两张叠在一起的贴纸 + 一张脸。描边粗细、圆头线帽跟页面里
+// 其它图标保持一致；stroke 必须写死颜色，html2canvas 序列化 SVG 时不解析
+// currentColor，写 currentColor 会截出一片空白。
+function zahuopuMarkSvg(size){
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="#111111" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">`
+    + `<path d="M7.5 4.2h9a3.2 3.2 0 0 1 3.2 3.2v9"/>`
+    + `<rect x="3.5" y="7.5" width="13" height="13" rx="3.4"/>`
+    + `<circle cx="8" cy="12.2" r=".9" fill="#111111" stroke="none"/>`
+    + `<circle cx="12" cy="12.2" r=".9" fill="#111111" stroke="none"/>`
+    + `<path d="M7.9 15.6c.5 1.05 1.25 1.6 2.1 1.6s1.6-.55 2.1-1.6"/>`
+    + `</svg>`;
 }
 function buildFontShareCardNode(f){
   return shareCardWrap(`
@@ -1618,13 +1644,29 @@ function buildFontShareCardNode(f){
   `);
 }
 function buildCollShareCardNode(c){
+  const avatarSrc = (c.authorId===currentUserId) ? (getMyHdAvatar() || avatarDataUrl) : c.authorAvatarUrl;
+  const avatar = shareAvatarExport(avatarSrc, String(c.author||'?').slice(0,1), 44);
+  const tags = asArray(c.tags).slice(0, 4);
+  const tagBand = tags.length ? `
+    <div style="padding:12px 16px 0;">
+      ${tags.map(t=>`<span style="display:inline-block; font-size:10.5px; line-height:1.7; color:#666; background:#F7F7F7; border:1px solid #EDEDED; border-radius:999px; padding:1px 9px; margin:0 5px 5px 0;">${esc(t)}</span>`).join('')}
+    </div>` : '';
   return shareCardWrap(`
-    ${coverHtmlExport(c.emojis)}
-    <div style="padding:16px 18px 20px;">
-      <div style="font-family:'Newsreader',Georgia,serif; font-style:italic; font-size:17px; color:#000;">${esc(c.title)}</div>
-      <div style="font-size:11.5px; color:#999; margin-top:4px;">${esc(c.author)} · ${c.emojis.length} 个表情 · 杂货铺</div>
+    <div style="position:relative; padding:17px 16px 15px;">
+      <div style="position:absolute; left:16px; top:16px;">${avatar}</div>
+      <div style="margin-left:56px; min-height:44px;">
+        <div style="font-family:'Newsreader',Georgia,serif; font-style:italic; font-size:18px; line-height:1.3; color:#000;">${esc(c.title)}</div>
+        <div style="font-size:11.5px; color:#999; margin-top:4px;">${esc(c.author)}</div>
+      </div>
     </div>
-  `);
+    ${shareGridExport(c.emojis)}
+    ${tagBand}
+    <div style="position:relative; margin:13px 16px 0; padding:11px 0 15px; border-top:1px solid #EDEDED;">
+      <div style="position:absolute; left:0; top:10px;">${zahuopuMarkSvg(16)}</div>
+      <div style="margin-left:23px; font-family:'Newsreader',Georgia,serif; font-style:italic; font-size:14px; line-height:18px; color:#000;">杂货铺</div>
+      <div style="position:absolute; right:0; top:11px; font-size:10.5px; line-height:16px; color:#BBB;">${c.emojis.length} 个表情</div>
+    </div>
+  `, 340);
 }
 
 /* ===================== tabs / nav ===================== */
