@@ -373,7 +373,6 @@
           <button data-type="fonts">字体</button>
         </div>
         <button class="icon-btn" id="homeRefreshBtn" aria-label="刷新"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v6h-6"/></svg></button>
-        <button class="icon-btn" id="leaderboardBtn" aria-label="贡献榜"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 21h8"/><path d="M12 17v4"/><path d="M7 4h10v5a5 5 0 0 1-10 0z"/><path d="M7 5H4a3 3 0 0 0 3 4"/><path d="M17 5h3a3 3 0 0 1-3 4"/></svg></button>
         <button class="icon-btn" id="notifBtn" aria-label="通知" style="position:relative;">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
           <span id="notifBadge" style="display:none; position:absolute; top:5px; right:5px; min-width:14px; height:14px; padding:0 3px; border-radius:999px; background:#E0453C; color:#fff; font-size:9px; font-weight:700; line-height:14px; text-align:center;"></span>
@@ -546,7 +545,6 @@
         </div>
       </div>
       <div class="ig-name" id="userProfileName"></div>
-      <div class="ig-status" id="userProfileBadge" style="display:none;"></div>
       <div class="ig-grid-wrap" id="userProfileGrid" style="margin-top:16px;"></div>
     </div>
   </div>
@@ -724,11 +722,6 @@
     <div class="sheet-box" id="notifSheetBox"></div>
   </div>
 
-  <!-- contributor leaderboard sheet -->
-  <div class="sheet-mask" id="leaderboardSheetMask">
-    <div class="sheet-box" id="leaderboardSheetBox"></div>
-  </div>
-
   <!-- edit profile sheet -->
   <div class="sheet-mask" id="profileSheetMask">
     <div class="sheet-box" id="profileSheetBox"></div>
@@ -879,7 +872,7 @@ let liked = new Set();
 let favorited = new Set();
 let fonts = [];
 let notifications = [];
-let contributorStats = new Map(); // userId -> {nickname, avatarUrl, worksCount, totalLikes, rank}
+let userStats = new Map(); // userId -> {nickname, avatarUrl, worksCount, totalLikes}
 
 /* ===================== auth / boot ===================== */
 const AUTH_EMAIL_SUFFIX = '@zahuopu.invalid';
@@ -1082,7 +1075,7 @@ function isBusyForRefresh(){
   if(currentPageId === 'publish') return true;
   const overlayIds = ['detailOverlay','fontDetailOverlay','fontEditorOverlay','aiOverlay','settingsOverlay','userProfileOverlay'];
   if(overlayIds.some(id => { const el=$(id); return el && el.classList.contains('open'); })) return true;
-  const sheetIds = ['dlSheetMask','pubSheetMask','confirmSheetMask','shareSheetMask','reportSheetMask','profileSheetMask','avatarCropMask','notifSheetMask','leaderboardSheetMask'];
+  const sheetIds = ['dlSheetMask','pubSheetMask','confirmSheetMask','shareSheetMask','reportSheetMask','profileSheetMask','avatarCropMask','notifSheetMask'];
   if(sheetIds.some(id => { const el=$(id); return el && el.classList.contains('open'); })) return true;
   // 这两个用的是 .show 不是 .open，之前漏掉了，长按预览/字体大图开着时照样会被刷新打断
   const showIds = ['peekMask','fontLightboxMask'];
@@ -1385,30 +1378,6 @@ async function openNotifSheet(){
   }
 }
 $('notifBtn').addEventListener('click', openNotifSheet);
-
-/* ===================== 贡献榜（自动统计，无需人工发放） ===================== */
-function renderLeaderboardSheet(){
-  const list = Array.from(contributorStats.values()).filter(s=>s.worksCount>0).slice(0,30);
-  $('leaderboardSheetBox').innerHTML = `
-    <div class="sheet-head"><span class="t">贡献榜</span><button class="icon-btn" id="lbCloseBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button></div>
-    <div class="sheet-scroll">
-      <p class="hint" style="margin-top:0;">按发布作品数和收到的点赞数排名，前三名有奖牌，前十名有星标——算是给贡献多的人一点看得见的认可。</p>
-      ${list.length ? `<div class="row-list">${list.map(s=>`
-        <div class="row-item author-link" data-user-id="${esc(s.userId)}" data-user-name="${esc(s.nickname)}" style="cursor:pointer;">
-          <div class="row-status" style="width:22px; padding-top:11px;"><b style="font-size:12px;">${s.rank}</b></div>
-          <div class="row-main">
-            <div style="font-size:13px; font-weight:600;">${esc(s.nickname||'（未命名）')}${contributorBadge(s.userId)}</div>
-            <div style="font-size:11px; color:var(--text-dim);">${s.worksCount} 个作品 · 获赞 ${s.totalLikes}</div>
-          </div>
-        </div>`).join('')}</div>` : '<p class="hint">还没有人发布过作品</p>'}
-    </div>
-  `;
-  $('lbCloseBtn').addEventListener('click', ()=>$('leaderboardSheetMask').classList.remove('open'));
-}
-$('leaderboardBtn').addEventListener('click', ()=>{
-  renderLeaderboardSheet();
-  $('leaderboardSheetMask').classList.add('open');
-});
 
 async function saveProfileRemote(nickname, status, avatar){
   const { error } = await sb.from('users').update({ nickname, status_message: status, avatar_url: avatar }).eq('id', currentUserId);
@@ -1906,11 +1875,11 @@ function statusDot(status){
   return '';
 }
 
-/* ===================== contributor stats (leaderboard + badges) ===================== */
-// 完全从已经加载好的 collections / fonts 里统计，不需要额外查表：
-// 按作者汇总作品数和收到的点赞总数，排出一个贡献榜，
-// 前三名给个奖牌 emoji，4~10 名给个星标，算是一种不需要后台人工操作的"小奖励"。
-function rebuildContributorStats(){
+/* ===================== per-user stats (works count + likes received) ===================== */
+// 完全从已经加载好的 collections / fonts 里统计，不需要额外查表。
+// 只给"查看某用户主页"用来显示获赞数；排行榜/勋章那套挪到管理员页面去了，
+// 主页面这边不再对外展示排名。
+function rebuildUserStats(){
   const map = new Map();
   const touch = (id, nickname, avatarUrl) => {
     let s = map.get(id);
@@ -1929,26 +1898,13 @@ function rebuildContributorStats(){
     const s = touch(f.user_id, f.author_nickname, null);
     s.worksCount++; s.totalLikes += (f.like_count||0);
   });
-  const ranked = Array.from(map.values())
-    .map(s=>({...s, score: s.totalLikes*2 + s.worksCount}))
-    .sort((a,b)=> b.score - a.score);
-  ranked.forEach((s,i)=>{ s.rank = i+1; });
-  contributorStats = new Map(ranked.map(s=>[s.userId, s]));
-}
-function contributorBadge(userId){
-  const s = userId && contributorStats.get(userId);
-  if(!s || !s.rank || !s.totalLikes) return '';
-  if(s.rank===1) return ' 🥇';
-  if(s.rank===2) return ' 🥈';
-  if(s.rank===3) return ' 🥉';
-  if(s.rank<=10) return ' ⭐';
-  return '';
+  userStats = map;
 }
 function authorLinkHtml(userId, name, extraStyle){
-  // 昵称做成可点的一小块，点开对方的公开主页（作品 + 贡献榜排名）。
+  // 昵称做成可点的一小块，点开对方的公开主页。
   // 用 span 不用 button：外面很多地方（表情包/字体卡片）本身就是一个大 <button>，
   // button 不能嵌套 button，嵌了浏览器会自动把它挪到外面，把布局和点击都搞乱。
-  return `<span class="author-link" data-user-id="${esc(userId||'')}" data-user-name="${esc(name||'')}" style="cursor:pointer;${extraStyle||''}">${esc(name||'')}${contributorBadge(userId)}</span>`;
+  return `<span class="author-link" data-user-id="${esc(userId||'')}" data-user-name="${esc(name||'')}" style="cursor:pointer;${extraStyle||''}">${esc(name||'')}</span>`;
 }
 // 必须用捕获阶段：很多 author-link 是嵌在 .coll-card 这种大按钮里的，
 // 冒泡阶段拦截时 coll-card 自己的点击（打开详情页）已经先触发完了。
@@ -1962,21 +1918,17 @@ document.addEventListener('click', (e)=>{
   // 不先关掉的话新打开的主页会被盖在下面，看着像点了没反应
   $('peekMask').classList.remove('show');
   $('fontLightboxMask').classList.remove('show');
-  $('leaderboardSheetMask').classList.remove('open');
   $('notifSheetMask').classList.remove('open');
   openUserProfile(uid, link.dataset.userName);
 }, true);
 
 /* ===================== other users' public profile (read-only) ===================== */
 function openUserProfile(userId, fallbackName){
-  const s = contributorStats.get(userId);
+  const s = userStats.get(userId);
   const nickname = (s && s.nickname) || fallbackName || '';
   const avatarUrl = userId===currentUserId ? (getMyHdAvatar() || avatarDataUrl) : (s && s.avatarUrl) || null;
   $('userProfileTitle').textContent = nickname || 'TA的主页';
   $('userProfileName').textContent = nickname || '（未命名）';
-  const badge = contributorBadge(userId);
-  $('userProfileBadge').textContent = badge ? badge.trim()+' 贡献榜第 '+s.rank+' 名' : '';
-  $('userProfileBadge').style.display = badge ? 'block' : 'none';
   if(avatarUrl){ $('userProfileAvatarImg').src = avatarUrl; $('userProfileAvatarImg').style.display='block'; $('userProfileAvatarPh').style.display='none'; }
   else { $('userProfileAvatarImg').style.display='none'; $('userProfileAvatarPh').style.display='flex'; $('userProfileAvatarPh').textContent = (nickname||'?').slice(0,1); }
   const items = [
@@ -3421,7 +3373,7 @@ function handleDeepLink(){
                      'userProfileOverlay',
                      'dlSheetMask','pubSheetMask','confirmSheetMask','shareSheetMask','reportSheetMask',
                      'profileSheetMask','avatarCropMask','peekMask','fontLightboxMask',
-                     'notifSheetMask','leaderboardSheetMask'];
+                     'notifSheetMask'];
   const openClassOf = id => (id==='peekMask' || id==='fontLightboxMask') ? 'show' : 'open';
   const stack = [];              // 按打开先后排，最后一个就是最上层
   let guard = 0;                 // 我们自己压进 history 的那条占位记录
@@ -3459,7 +3411,7 @@ function handleDeepLink(){
 
 /* ===================== init ===================== */
 function renderAll(){
-  rebuildContributorStats();
+  rebuildUserStats();
   renderHome();
   renderCategoryChips(); renderCategory();
   renderFavorites();
