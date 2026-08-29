@@ -179,6 +179,11 @@
   .action-btn.pop svg{animation:pop .32s cubic-bezier(.3,1.5,.6,1);}
 
   .emoji-grid{display:grid; grid-template-columns:1fr 1fr; gap:10px; padding:14px 18px;}
+  /* 网格子项默认 min-width:auto，长描述配 white-space:nowrap 会把它的"内容最小宽度"
+     撑成整行文字的宽度，两列本来该一样宽（1fr 1fr），结果长描述那列被撑大，
+     另一列被挤小——两张图各自看还是正方形，但明显一大一小。
+     min-width:0（配合下面的 overflow:hidden）把这个自动最小宽度清零。 */
+  .emoji-cell{min-width:0; overflow:hidden;}
   .emoji-cell img{width:100%; aspect-ratio:1/1; object-fit:cover; display:block; background:var(--bg-elev); border:1px solid var(--border-soft);}
   .emoji-caption{font-size:11.5px; color:var(--text-dim); margin-top:5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
 
