@@ -15,8 +15,11 @@ create table if not exists public.notifications (
   -- （其他表也没有专门给"任意用户"用的公开视图，省得再申请一次读权限）。
   actor_nickname text,
   type         text not null default 'like',
-  collection_id bigint references public.collections(id) on delete cascade,
-  font_id       bigint references public.fonts(id) on delete cascade,
+  -- collections.id 是 uuid（不是 bigint）——上一版猜错了类型，建表时报了外键
+  -- 类型不匹配的错。fonts.id 大概率也是 uuid（跟 users.id 一个套路），如果这行
+  -- 也报同样的错，把 uuid 换成 bigint 再跑一次就行。
+  collection_id uuid references public.collections(id) on delete cascade,
+  font_id       uuid references public.fonts(id) on delete cascade,
   read         boolean not null default false,
   created_at   timestamptz not null default now()
 );
