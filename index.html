@@ -159,6 +159,21 @@
   .coll-stats{display:flex; align-items:center; gap:10px; font-size:11px; color:var(--text-faint); margin-top:3px;}
   .coll-stats svg{width:11px; height:11px; vertical-align:-1px; margin-right:2px;}
 
+  /* tags: small standalone chips, distinct from the bolder filter/category .chip so they never compete with it visually */
+  .tag-row{display:flex; flex-wrap:wrap; gap:5px; margin-top:6px;}
+  .tag-chip{font-size:10.5px; line-height:1.6; color:var(--text-dim); background:var(--bg-elev); border:1px solid var(--border-soft); border-radius:999px; padding:2px 8px; white-space:nowrap;}
+  .tag-input-row{display:flex; flex-wrap:wrap; gap:6px; align-items:center; border:1px solid var(--border); border-radius:var(--radius-s); padding:7px 9px;}
+  .tag-chip-edit{display:inline-flex; align-items:center; gap:3px; background:var(--bg-elev); border:1px solid var(--border-soft); border-radius:999px; padding:3px 4px 3px 10px; font-size:12px; color:var(--text); max-width:100%;}
+  .tag-chip-edit .tag-del-btn{border:none; background:none; padding:0; margin:0; width:15px; height:15px; display:flex; align-items:center; justify-content:center; color:var(--text-faint); cursor:pointer; flex-shrink:0;}
+  .tag-chip-edit .tag-del-btn svg{width:10px; height:10px;}
+  #pubTagInput{flex:1; min-width:90px; border:none; outline:none; background:transparent; font-size:13px; padding:3px 0;}
+
+  /* usage permission checkboxes: reuses .sel-check-inline's look, just without its row-thumbnail margin-top */
+  .perm-list{border-top:1px solid var(--border-soft);}
+  .perm-row{display:flex; align-items:center; gap:10px; padding:10px 2px; border-bottom:1px solid var(--border-soft); cursor:pointer;}
+  .perm-row .sel-check-inline{margin-top:0;}
+  .perm-label{font-size:13px; font-weight:500;}
+
   /* overlay (detail + AI + settings) */
   .overlay{position:fixed; inset:0; background:var(--bg); z-index:50; display:flex; flex-direction:column; max-width:480px; margin:0 auto; border-left:1px solid var(--border); border-right:1px solid var(--border); transform:translateX(100%); visibility:hidden; transition:transform .28s cubic-bezier(.2,.7,.3,1), visibility 0s linear .28s;}
   .overlay.open{transform:translateX(0); visibility:visible; transition:transform .28s cubic-bezier(.2,.7,.3,1), visibility 0s linear 0s;}
@@ -1054,18 +1069,37 @@ async function loadCollections(){
       (byCollection[e.collection_id] ||= []).push({ id:e.id, url:(e.image_assets&&e.image_assets.source_url)||'', desc:e.description, source:e.source||'' });
     });
   }
-  collections = (cols||[]).map(c=>({
-    id: c.id,
-    title: c.title,
-    author: c.author_nickname,
-    authorId: c.user_id,
-    authorAvatarUrl: c.author_avatar_url || null,
-    category: c.category,
-    source: c.source || '',
-    likeCount: c.like_count || 0,
-    emojis: byCollection[c.id] || [],
-    createdAt: new Date(c.created_at).getTime(),
-  }));
+  // 标签 / 使用权限：collections_with_stats 是数据库里早就建好的视图，给
+  // collections 表加列不会自动出现在视图里，所以单独从原表按 id 查一遍拼回去。
+  // 查询失败（比如 sql/tags_and_permissions.sql 还没在 Supabase 里执行过、
+  // 列压根不存在）时这里直接吞掉错误——旧数据/旧库本来就应该退回安全默认值，
+  // 不能因为这几个新字段让整个作品列表加载失败。
+  const permByCollection = {};
+  for(const chunk of chunkArray(ids, 100)){
+    const { data: rows, error: permErr } = await sb.from('collections')
+      .select('id, tags, allow_repost, allow_edit, other_permission').in('id', chunk);
+    if(permErr){ console.warn('加载标签/权限失败（将使用默认值）：', permErr.message); continue; }
+    (rows||[]).forEach(r=>{ permByCollection[r.id] = r; });
+  }
+  collections = (cols||[]).map(c=>{
+    const perm = permByCollection[c.id] || {};
+    return {
+      id: c.id,
+      title: c.title,
+      author: c.author_nickname,
+      authorId: c.user_id,
+      authorAvatarUrl: c.author_avatar_url || null,
+      category: c.category,
+      tags: asArray(perm.tags).map(t=>String(t==null?'':t).trim()).filter(Boolean),
+      allowRepost: !!perm.allow_repost,
+      allowEdit: !!perm.allow_edit,
+      otherPermission: perm.other_permission || '',
+      source: c.source || '',
+      likeCount: c.like_count || 0,
+      emojis: byCollection[c.id] || [],
+      createdAt: new Date(c.created_at).getTime(),
+    };
+  });
 }
 async function loadMyLikesFavorites(){
   // (collection_id, font_id) 在单个用户下唯一，用它做排序键翻页才稳
@@ -1157,8 +1191,11 @@ function mapAssetsToItems(items, assets){
   }
   return ids;
 }
-async function createCollectionRemote(title, category, items, source){
-  const { data: coll, error: cErr } = await sb.from('collections').insert({ title, category, source: source||null, user_id: currentUserId }).select().single();
+async function createCollectionRemote(title, category, items, source, tags, allowRepost, allowEdit, otherPermission){
+  const { data: coll, error: cErr } = await sb.from('collections').insert({
+    title, category, source: source||null, user_id: currentUserId,
+    tags: tags||[], allow_repost: !!allowRepost, allow_edit: !!allowEdit, other_permission: otherPermission||'',
+  }).select().single();
   if(cErr){ showToast('发布失败：'+cErr.message); return false; }
   // 合集行已经落库了，后面任何一步失败都必须把它清掉，
   // 否则首页会留下一个 0 个表情的空合集，所有人都看得见
@@ -1194,8 +1231,11 @@ async function createCollectionRemote(title, category, items, source){
 }
 // 注意：下面这套是"尽力而为"的补偿式回滚。真正干净的做法是把整段
 // 挪进一个 Postgres 函数里用事务跑，客户端只调一次 RPC。
-async function updateCollectionRemote(id, title, category, items, source){
-  const { error: uErr } = await sb.from('collections').update({ title, category, source: source||null }).eq('id', id);
+async function updateCollectionRemote(id, title, category, items, source, tags, allowRepost, allowEdit, otherPermission){
+  const { error: uErr } = await sb.from('collections').update({
+    title, category, source: source||null,
+    tags: tags||[], allow_repost: !!allowRepost, allow_edit: !!allowEdit, other_permission: otherPermission||'',
+  }).eq('id', id);
   if(uErr){ showToast('保存失败：'+uErr.message); return false; }
 
   // 1) 先完整读出旧表情，失败时用来还原
@@ -1845,6 +1885,24 @@ async function buildDocxBlob(text){
   zip.file('word/document.xml', documentXml);
   return zip.generateAsync({type:'blob', mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'});
 }
+// 导出文档顶部的权限声明。都不勾选时只显示"禁止二传二改"一行，
+// 而不是把"二传：禁止二传 / 二改：禁止二改"都摊开写——跟发布页的勾选逻辑
+// 保持一致：没设置权限的旧数据也会落到这个分支，默认视为禁止二传二改。
+function permissionHeaderText(c){
+  const allowRepost = !!(c && c.allowRepost);
+  const allowEdit = !!(c && c.allowEdit);
+  const other = c && c.otherPermission ? String(c.otherPermission).trim() : '';
+  const lines = ['【使用权限】'];
+  if(!allowRepost && !allowEdit){
+    lines.push('禁止二传二改');
+  } else {
+    lines.push(`二传：${allowRepost ? '允许' : '禁止二传'}`);
+    lines.push(`二改：${allowEdit ? '允许' : '禁止二改'}`);
+  }
+  if(other) lines.push(`其他：${other}`);
+  const rule = '━━━━━━━━━━━━';
+  return [rule, ...lines, rule].join('\n');
+}
 function downloadBlob(blob, filename){
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a'); a.href=url; a.download=filename;
@@ -1965,12 +2023,18 @@ function openUserProfile(userId, fallbackName){
 $('userProfileBackBtn').addEventListener('click', ()=>$('userProfileOverlay').classList.remove('open'));
 
 /* ===================== collection cards / grids (with long-press peek) ===================== */
+function tagRowHtml(tags){
+  const list = asArray(tags);
+  if(!list.length) return '';
+  return `<div class="tag-row">${list.map(t=>`<span class="tag-chip">${esc(t)}</span>`).join('')}</div>`;
+}
 function collCardHtml(c){
   return `<button class="coll-card" data-id="${esc(c.id)}">
     ${coverHtml(c.emojis)}
     <div class="coll-name">${esc(c.title)}</div>
     <div class="coll-sub">${authorLinkHtml(c.authorId, c.author)} · ${esc(c.category)}</div>
     <div class="coll-stats"><span>${c.emojis.length} 个表情</span><span>${heartIcon()}${c.likeCount}</span></div>
+    ${tagRowHtml(c.tags)}
   </button>`;
 }
 function fontBrowseCardHtml(f){
@@ -2055,7 +2119,7 @@ function renderHome(){
     items = list.map(f=>({type:'font', data:f, sortKey: homeSort==='hot' ? (f.like_count||0) : new Date(f.created_at).getTime()}));
   } else {
     let list = collections;
-    if(q) list = list.filter(c => low(c.title).includes(q) || low(c.category).includes(q) || low(c.author).includes(q) || c.emojis.some(e=>low(e.desc).includes(q)));
+    if(q) list = list.filter(c => low(c.title).includes(q) || low(c.category).includes(q) || low(c.author).includes(q) || c.emojis.some(e=>low(e.desc).includes(q)) || asArray(c.tags).some(t=>low(t).includes(q)));
     items = list.map(c=>({type:'collection', data:c, sortKey: homeSort==='hot' ? c.likeCount : c.createdAt}));
   }
   items.sort((a,b)=>b.sortKey-a.sortKey);
@@ -2103,7 +2167,7 @@ function renderCategory(){
     items = list.map(f=>({type:'font', data:f}));
   } else {
     let list = activeCategory ? collections.filter(c=>c.category===activeCategory) : collections.slice();
-    if(q){ list = list.filter(c=>low(c.title).includes(q) || low(c.author).includes(q) || c.emojis.some(e=>low(e.desc).includes(q))); }
+    if(q){ list = list.filter(c=>low(c.title).includes(q) || low(c.author).includes(q) || c.emojis.some(e=>low(e.desc).includes(q)) || asArray(c.tags).some(t=>low(t).includes(q))); }
     items = list.map(c=>({type:'collection', data:c}));
   }
   renderItemsGrid($('catGrid'), items, activeCategory ? `「${activeCategory}」分类下暂时还没有内容` : '还没有内容');
@@ -2187,6 +2251,7 @@ function renderDetail(justToggled){
     <div class="detail-meta">
       <div class="detail-title">${esc(c.title)}</div>
       <div class="detail-sub">${authorLinkHtml(c.authorId, c.author)} · ${esc(c.category)} · ${c.emojis.length} 个表情${c.source?` · 来源：${esc(c.source)}`:''}</div>
+      ${tagRowHtml(c.tags)}
       <div class="action-row">
         <button class="action-btn ${isLiked?'active':''}" id="likeBtn">${heartIcon()}<span>${c.likeCount}</span></button>
         <button class="action-btn ${isFav?'active':''}" id="favBtn">${bookmarkIcon()}<span>${isFav?'已收藏':'收藏'}</span></button>
@@ -2315,8 +2380,10 @@ function openDownloadSheet(c){
       const sources = new Set();
       if(c.source && c.source.trim()) sources.add(c.source.trim());
       chosen.forEach(e=>{ if(e.source && e.source.trim()) sources.add(e.source.trim()); });
-      if(!sources.size) return mainLines;
-      return `来源：${Array.from(sources).join('、')}\n\n${mainLines}`;
+      const parts = [permissionHeaderText(c)];
+      if(sources.size) parts.push(`来源：${Array.from(sources).join('、')}`);
+      parts.push(mainLines);
+      return parts.join('\n\n');
     };
 
     function draw(){
@@ -3003,6 +3070,13 @@ $('pubSubmitBtn').addEventListener('click', ()=>{
   openPublishSheet();
 });
 
+const TAG_MAX = 20;
+// 供"从已有标签中选择"用：全站所有作品里出现过的标签去重排序一份。
+function getAllKnownTags(){
+  const set = new Set();
+  collections.forEach(c=> asArray(c.tags).forEach(t=>{ t = String(t==null?'':t).trim(); if(t) set.add(t); }));
+  return Array.from(set).sort((a,b)=>a.localeCompare(b,'zh'));
+}
 function openPublishSheet(){
   const editing = collections.find(c=>c.id===editingCollectionId);
   if(editingCollectionId && !editing){
@@ -3016,11 +3090,37 @@ function openPublishSheet(){
   let usingCustom = editing ? !CATEGORIES.includes(editing.category) : false;
   let customCat = usingCustom ? editing.category : '';
   let source = editing ? (editing.source || '') : '';
+  let tags = editing ? asArray(editing.tags).slice() : [];
+  let tagInputVal = '';
+  let allowRepost = editing ? !!editing.allowRepost : false;
+  let allowEdit = editing ? !!editing.allowEdit : false;
+  let otherChecked = editing ? !!(editing.otherPermission && editing.otherPermission.trim()) : false;
+  let otherText = editing ? (editing.otherPermission || '') : '';
   $('pubSheetMask').classList.add('open');
   draw();
 
+  // 每次要重画整个 sheet 之前，把当前还挂在 DOM 上的输入框值先收回闭包变量里，
+  // 否则点一下标签删除按钮/权限勾选框，前面正在打的合集名称、来源、标签输入框
+  // 里已经打了一半的字就会被这次 innerHTML 重建冲掉。
+  function syncFromInputs(){
+    if($('pubModalTitle')) title = $('pubModalTitle').value;
+    if($('pubModalCustomCat')) customCat = $('pubModalCustomCat').value;
+    if($('pubModalSource')) source = $('pubModalSource').value;
+    if($('pubTagInput')) tagInputVal = $('pubTagInput').value;
+    if($('pubOtherPermInput')) otherText = $('pubOtherPermInput').value;
+  }
+  function addTag(raw){
+    const v = String(raw==null?'':raw).trim().slice(0,20);
+    if(!v) return;
+    if(tags.includes(v)) return;
+    if(tags.length>=TAG_MAX){ showToast(`最多添加 ${TAG_MAX} 个标签`); return; }
+    tags.push(v);
+  }
+
   function draw(){
     const count = pubItems.filter(it=>it.url.trim()).length;
+    const suggestions = getAllKnownTags().filter(t=>!tags.includes(t)).slice(0,20);
+    const checkSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>';
     $('pubSheetBox').innerHTML = `
       <div class="sheet-head"><span class="t">${editing?'保存修改':'发布作品'}</span><button class="icon-btn" id="pubSheetCloseBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button></div>
       <div class="sheet-scroll">
@@ -3032,6 +3132,23 @@ function openPublishSheet(){
         <div class="field-label">来源（可选）</div>
         <input class="field-input" id="pubModalSource" placeholder="整个作品统一的来源，留空表示不标注" value="${esc(source)}">
         <p class="hint" style="margin-top:4px;">如果某几条表情来源不一样，可以在表情列表里单独给那一条填来源，会优先用那条自己的。</p>
+
+        <div class="field-label">标签（可选，用来进一步描述特点，最多 ${TAG_MAX} 个）</div>
+        <div class="tag-input-row" id="pubTagInputRow">
+          ${tags.map(t=>`<span class="tag-chip-edit">${esc(t)}<button type="button" class="tag-del-btn" data-tag="${esc(t)}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button></span>`).join('')}
+          <input id="pubTagInput" placeholder="${tags.length?'继续添加…':'输入标签后按回车'}" value="${esc(tagInputVal)}">
+        </div>
+        ${suggestions.length ? `<div class="chip-row" id="pubTagSuggestRow" style="margin-top:8px;">${suggestions.map(t=>`<button type="button" class="chip" data-tag="${esc(t)}">${esc(t)}</button>`).join('')}</div>` : ''}
+
+        <div class="field-label">使用权限</div>
+        <div class="perm-list">
+          <div class="perm-row" id="permRepostRow"><div class="sel-check-inline ${allowRepost?'on':''}">${allowRepost?checkSvg:''}</div><span class="perm-label">允许二传</span></div>
+          <div class="perm-row" id="permEditRow"><div class="sel-check-inline ${allowEdit?'on':''}">${allowEdit?checkSvg:''}</div><span class="perm-label">允许二改</span></div>
+          <div class="perm-row" id="permOtherRow"><div class="sel-check-inline ${otherChecked?'on':''}">${otherChecked?checkSvg:''}</div><span class="perm-label">其他</span></div>
+        </div>
+        ${otherChecked ? `<input class="field-input" id="pubOtherPermInput" placeholder="填写具体说明，例如：转载请注明出处" style="margin-top:8px;" value="${esc(otherText)}">` : ''}
+        <p class="hint" style="margin-top:6px;">不勾选任何一项，默认视为禁止二传二改；导出文档会自动带上这份权限说明。</p>
+
         <p class="hint" style="margin-top:12px;">共 ${count} 个表情将被${editing?'保存':'发布'}。</p>
       </div>
       <div class="sheet-footer"><button class="btn-solid" id="pubModalConfirmBtn">${editing?'确认保存':'确认发布'}</button></div>
@@ -3042,23 +3159,66 @@ function openPublishSheet(){
     const catWrap = $('pubModalCatRow'); catWrap.innerHTML='';
     CATEGORIES.forEach(cat=>{
       const b=document.createElement('button'); b.className='chip'+(!usingCustom&&category===cat?' active':''); b.textContent=cat;
-      b.addEventListener('click',()=>{ title=$('pubModalTitle').value; customCat=$('pubModalCustomCat').value; source=$('pubModalSource').value; category=cat; usingCustom=false; draw(); });
+      b.addEventListener('click',()=>{ syncFromInputs(); category=cat; usingCustom=false; draw(); });
       catWrap.appendChild(b);
     });
     const customBtn=document.createElement('button'); customBtn.className='chip'+(usingCustom?' active':''); customBtn.textContent='＋ 自定义';
-    customBtn.addEventListener('click',()=>{ title=$('pubModalTitle').value; customCat=$('pubModalCustomCat').value; source=$('pubModalSource').value; usingCustom=true; draw(); });
+    customBtn.addEventListener('click',()=>{ syncFromInputs(); usingCustom=true; draw(); });
     catWrap.appendChild(customBtn);
     const cc = $('pubModalCustomCat'); if(cc) cc.addEventListener('input', e=>{ customCat=e.target.value; });
+
+    const tagInput = $('pubTagInput');
+    tagInput.addEventListener('input', e=>{ tagInputVal = e.target.value; });
+    tagInput.addEventListener('keydown', e=>{
+      if(e.key!=='Enter') return;
+      e.preventDefault();
+      syncFromInputs();
+      addTag(tagInputVal);
+      tagInputVal = '';
+      draw();
+      const el = $('pubTagInput'); if(el) el.focus();
+    });
+    $('pubTagInputRow').querySelectorAll('.tag-del-btn').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        syncFromInputs();
+        tags = tags.filter(t=>t!==btn.dataset.tag);
+        draw();
+      });
+    });
+    const sugRow = $('pubTagSuggestRow');
+    if(sugRow) sugRow.querySelectorAll('button[data-tag]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        syncFromInputs();
+        addTag(btn.dataset.tag);
+        draw();
+        const el = $('pubTagInput'); if(el) el.focus();
+      });
+    });
+
+    $('permRepostRow').addEventListener('click', ()=>{ syncFromInputs(); allowRepost=!allowRepost; draw(); });
+    $('permEditRow').addEventListener('click', ()=>{ syncFromInputs(); allowEdit=!allowEdit; draw(); });
+    $('permOtherRow').addEventListener('click', ()=>{
+      syncFromInputs();
+      otherChecked=!otherChecked;
+      if(!otherChecked) otherText='';
+      draw();
+      if(otherChecked){ const el=$('pubOtherPermInput'); if(el) el.focus(); }
+    });
+    const otherInput = $('pubOtherPermInput');
+    if(otherInput) otherInput.addEventListener('input', e=>{ otherText = e.target.value; });
+
     $('pubModalConfirmBtn').addEventListener('click', async ()=>{
       const finalTitle = $('pubModalTitle').value.trim();
       if(!finalTitle){ showToast('请填写合集名称'); return; }
       const finalCategory = usingCustom && $('pubModalCustomCat').value.trim() ? $('pubModalCustomCat').value.trim() : category;
       const finalSource = $('pubModalSource').value.trim();
+      const finalTags = tags.slice();
+      const finalOtherPermission = otherChecked ? ($('pubOtherPermInput')?$('pubOtherPermInput').value.trim():'') : '';
       const validItems = pubItems.filter(it=>it.url.trim());
       $('pubModalConfirmBtn').disabled = true;
       $('pubModalConfirmBtn').textContent = editing ? '保存中…' : '发布中…';
       if(editing){
-        const ok = await updateCollectionRemote(editing.id, finalTitle, finalCategory, validItems, finalSource);
+        const ok = await updateCollectionRemote(editing.id, finalTitle, finalCategory, validItems, finalSource, finalTags, allowRepost, allowEdit, finalOtherPermission);
         $('pubModalConfirmBtn').disabled = false;
         if(!ok){ $('pubModalConfirmBtn').textContent = '确认保存'; return; }
         editingCollectionId = null;
@@ -3070,7 +3230,7 @@ function openPublishSheet(){
         await loadAppData();
         showPage('my');
       } else {
-        const ok = await createCollectionRemote(finalTitle, finalCategory, validItems, finalSource);
+        const ok = await createCollectionRemote(finalTitle, finalCategory, validItems, finalSource, finalTags, allowRepost, allowEdit, finalOtherPermission);
         $('pubModalConfirmBtn').disabled = false;
         if(!ok){ $('pubModalConfirmBtn').textContent = '确认发布'; return; }
         pubItems=[{id:uid(),url:'',desc:'',status:'idle',source:''}]; batchMode=false; batchSelected=new Set(); renderPubItems();
