@@ -143,12 +143,17 @@
   .coll-card{cursor:pointer; text-align:left; background:transparent; border:none; padding:0; color:var(--text); width:100%; transition:transform .12s ease, opacity .12s ease; -webkit-touch-callout:none; -webkit-user-select:none; user-select:none; -webkit-user-drag:none;}
   .coll-card:active{transform:scale(.97); opacity:.9;}
   .coll-card img{-webkit-touch-callout:none; -webkit-user-drag:none; pointer-events:none;}
-  .coll-cover{width:100%; aspect-ratio:1/1; overflow:hidden; border:1px solid var(--border-soft); background:var(--border-soft); display:grid; gap:1px;}
-  .coll-cover.single{grid-template-columns:1fr; grid-template-rows:1fr;}
-  .coll-cover.two{grid-template-columns:1fr 1fr; grid-template-rows:1fr;}
-  .coll-cover.quad{grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr;}
-  .coll-cover img{width:100%; height:100%; object-fit:cover; display:block; background:var(--bg-elev);}
-  .cover-empty{width:100%; height:100%; background:var(--bg-elev);}
+  /* 正方形靠 padding-top 撑，不用 aspect-ratio：aspect-ratio 撑出来的高度
+     对 grid 子项来说不是"确定高度"，子图片的 height:100% 就解析不出来，
+     退回按自己原始长宽比算高——几张比例差很远的图拼在一起，格子就一个大一个小。
+     padding-top 是纯盒模型换算，历史悠久，不会有这个问题。 */
+  .coll-cover{width:100%; padding-top:100%; position:relative; overflow:hidden; border:1px solid var(--border-soft); background:var(--border-soft);}
+  .coll-cover-inner{position:absolute; inset:0; display:grid; gap:1px;}
+  .coll-cover.single .coll-cover-inner{grid-template-columns:1fr; grid-template-rows:1fr;}
+  .coll-cover.two .coll-cover-inner{grid-template-columns:1fr 1fr; grid-template-rows:1fr;}
+  .coll-cover.quad .coll-cover-inner{grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr;}
+  .coll-cover-cell{position:relative; overflow:hidden; background:var(--bg-elev);}
+  .coll-cover-cell img{position:absolute; inset:0; width:100%; height:100%; object-fit:cover; display:block;}
   .coll-name{font-family:'Newsreader', Georgia, serif; font-style:italic; font-size:14px; margin-top:8px;}
   .coll-sub{font-size:11px; color:var(--text-dim); margin-top:2px;}
   .coll-stats{display:flex; align-items:center; gap:10px; font-size:11px; color:var(--text-faint); margin-top:3px;}
@@ -1853,18 +1858,24 @@ function emojiCellHtml(e){
     <div class="emoji-caption">${esc(e.desc)}</div>
   </div>`;
 }
+function coverCellHtml(e, fadeAttr){
+  // 每格图片包一层 .coll-cover-cell，图片本身绝对定位铺满这层——
+  // 这样图片的原始长宽比不会影响格子大小，几张比例差很远的图拼出来才能一样大。
+  if(!e) return `<div class="coll-cover-cell"></div>`;
+  return `<div class="coll-cover-cell"><img src="${esc(e.url)}" ${fadeAttr} onerror="this.style.opacity=0"></div>`;
+}
 function coverHtml(emojis, noFade){
   const fadeAttr = noFade ? '' : FADE_ATTR;
   const imgs = emojis.slice(0,4);
   if(imgs.length<=1){
-    return `<div class="coll-cover single">${imgs[0]?`<img src="${esc(imgs[0].url)}" ${fadeAttr} onerror="this.style.opacity=0">`:''}</div>`;
+    return `<div class="coll-cover single"><div class="coll-cover-inner">${imgs[0]?coverCellHtml(imgs[0], fadeAttr):''}</div></div>`;
   }
   if(imgs.length===2){
-    return `<div class="coll-cover two">${imgs.map(e=>`<img src="${esc(e.url)}" ${fadeAttr} onerror="this.style.opacity=0">`).join('')}</div>`;
+    return `<div class="coll-cover two"><div class="coll-cover-inner">${imgs.map(e=>coverCellHtml(e, fadeAttr)).join('')}</div></div>`;
   }
   const cells = imgs.slice(0,4);
   while(cells.length<4) cells.push(null);
-  return `<div class="coll-cover quad">${cells.map(e=>e?`<img src="${esc(e.url)}" ${fadeAttr} onerror="this.style.opacity=0">`:'<div class="cover-empty"></div>').join('')}</div>`;
+  return `<div class="coll-cover quad"><div class="coll-cover-inner">${cells.map(e=>coverCellHtml(e, fadeAttr)).join('')}</div></div>`;
 }
 function heartIcon(){ return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20s-7-4.4-9.5-9A5.5 5.5 0 0 1 12 5.5 5.5 5.5 0 0 1 21.5 11c-2.5 4.6-9.5 9-9.5 9z"/></svg>`; }
 function bookmarkIcon(){ return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>`; }
