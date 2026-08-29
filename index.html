@@ -629,6 +629,12 @@
       <div class="chip-row" id="aiPresetRow"></div>
       <div class="field-label">Prompt</div>
       <textarea class="field-input" id="aiPromptInput" style="min-height:56px;"></textarea>
+      <div class="field-label">生成方式</div>
+      <div class="chip-row" id="aiModeRow">
+        <button class="chip active" data-mode="concurrent">并发调用</button>
+        <button class="chip" data-mode="merged">合并调用</button>
+      </div>
+      <p class="field-help" id="aiModeHelp">并发调用：还是一张图一次请求，但同时发好几个，比一张张排队快，接口调用次数不变。</p>
       <div class="btn-row">
         <button class="btn-solid" id="aiRunBtn">开始生成</button>
         <button class="btn-outline" id="aiStopBtn" style="display:none;">停止</button>
@@ -2660,6 +2666,19 @@ let presets = [];
 let activePresetId = null;
 let editingPresetId = null;
 let aiRunning = false, aiAbort = false, aiController = null;
+let aiMode = 'concurrent'; // 'concurrent'：一图一请求但并发跑；'merged'：多张图拼进一次请求
+const AI_MODE_HELP = {
+  concurrent: '并发调用：还是一张图一次请求，但同时发好几个，比一张张排队快，接口调用次数不变。',
+  merged: '合并调用：把好几张图拼进同一次请求，让模型按顺序依次描述，接口调用次数明显变少——但要求模型比较听话地按行输出，效果不如逐张稳，出错了这一批会整体标记失败，可以重新生成。',
+};
+document.querySelectorAll('#aiModeRow .chip').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    document.querySelectorAll('#aiModeRow .chip').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    aiMode = btn.dataset.mode;
+    $('aiModeHelp').textContent = AI_MODE_HELP[aiMode];
+  });
+});
 
 function renderAiPresetChips(){
   const wrap = $('aiPresetRow'); if(!wrap) return; wrap.innerHTML='';
@@ -2720,6 +2739,52 @@ async function callVisionAPI(preset, prompt, imageUrl, signal){
   if(!text) throw new Error('返回格式异常');
   return String(text).trim();
 }
+// 合并调用：把最多 AI_MERGE_BATCH_SIZE 张图拼进同一个请求，让模型按顺序
+// 依次输出每张图的描述，一次请求顶多张单独调用。批数太大容易超 token 上限、
+// 也更容易让模型数错行，所以限了个不大的批次。
+const AI_MERGE_BATCH_SIZE = 6;
+function buildMergedPrompt(prompt, n){
+  return prompt + `\n\n接下来会依次给你 ${n} 张图。请严格输出 ${n} 行，每行一个短语，按图片出现的顺序一一对应，不要编号、不要多余的空行、不要除短语以外的任何文字。`;
+}
+// 模型有时会自己加编号（"1. xxx"/"1、xxx"/"图1：xxx"），这里按行拆开后顺手去掉
+function splitBatchLines(text, n){
+  return String(text||'').split('\n')
+    .map(s=>s.trim())
+    .filter(Boolean)
+    .map(l=> l.replace(/^\s*(?:图?\s*\d+\s*[.、:：)]\s*)/,''));
+}
+async function callVisionAPIBatch(preset, prompt, rows, signal){
+  const n = rows.length;
+  const batchPrompt = buildMergedPrompt(prompt, n);
+  if(providerOf(preset)==='google'){
+    const parts = [{text: batchPrompt}];
+    for(const row of rows){
+      const image = await imageToInlineData(row.url, signal);
+      parts.push({inlineData:{mimeType:image.mimeType, data:image.data}});
+    }
+    const model = String(preset.model||'').replace(/^models\//,'');
+    const res = await fetch(googleBase(preset.endpoint)+'/models/'+encodeURIComponent(model)+':generateContent?key='+encodeURIComponent(preset.key), {
+      method:'POST', signal, headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({contents:[{role:'user', parts}], generationConfig:{maxOutputTokens:80*n+120}})
+    });
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    const data = await res.json();
+    const text = data && data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts && data.candidates[0].content.parts.map(p=>p.text||'').join('\n');
+    if(!text) throw new Error('返回格式异常');
+    return splitBatchLines(text, n);
+  }
+  const content = [{type:'text', text: batchPrompt}];
+  rows.forEach(row=>{ content.push({type:'image_url', image_url:{url: row.url}}); });
+  const res = await fetch(resolveEndpoint(preset.endpoint), {
+    method:'POST', signal, headers:{'Content-Type':'application/json', 'Authorization':'Bearer '+preset.key},
+    body: JSON.stringify({model:preset.model, messages:[{role:'system', content:batchPrompt},{role:'user', content}], max_tokens:80*n+120})
+  });
+  if(!res.ok) throw new Error('HTTP '+res.status);
+  const data = await res.json();
+  const text = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
+  if(!text) throw new Error('返回格式异常');
+  return splitBatchLines(text, n);
+}
 // 视觉模型经常不听话：会在真正的描述前后加"好的，这张图片是..."之类的
 // 开场白、把描述包在引号里、甚至带一段 <think>...</think> 推理过程。
 // 这里做一次尽量通用的清理，而不是指望所有模型都严格听 prompt。
@@ -2734,7 +2799,7 @@ function cleanAiDesc(text){
   line = line.replace(/^["'“”‘’「」『』]+|["'“”‘’「」『』]+$/g, '');
   // 开场白经常是"好的，这张图片表达的情绪是：xxx"这种叠了两三层的前缀，
   // 一次 replace 只吃掉最外层，所以要反复剥，直到剥不动为止
-  const prefixRe = /^(好的[，,、]?\s*|这(张|个)?(图片?|表情包?|图)(所)?(表达|想表达|传达)?(的情绪|的意思|的内容)?(大概)?(是|为)?[:：，,]?\s*|描述[:：]\s*|答案[:：]\s*)/;
+  const prefixRe = /^(好的[，,、]?\s*|这(张|个)?(图片?|表情包?|图)(所)?(表达|想表达|传达)?(的情绪|的意思|的内容)?(大概)?(是|为)?[:：，,]?\s*|描述[:：]\s*|答案[:：]\s*|(?:图?\s*\d+\s*[.、:：)]\s*))/;
   for(let i=0;i<5;i++){
     const next = line.replace(prefixRe,'');
     if(next===line) break;
@@ -2749,6 +2814,59 @@ function updateAiButtons(){
   $('aiRunBtn').style.display = aiRunning ? 'none' : 'flex';
   $('aiStopBtn').style.display = aiRunning ? 'flex' : 'none';
 }
+// 并发调用：还是一张图一次请求，但同时跑几个 worker，比排队一张张等快很多
+const AI_CONCURRENCY = 3;
+async function runAiConcurrent(pending, preset, prompt, signal, onTick){
+  let cursor = 0, done = 0, failed = 0;
+  async function worker(){
+    for(;;){
+      if(aiAbort) return;
+      const row = pending[cursor++];
+      if(!row) return;
+      // 生成过程中用户可能把这行删了（批量删除），写回去只会丢进一个已经脱钩的对象
+      if(!pubItems.includes(row)){ done++; onTick(done, failed); continue; }
+      row.status='loading'; refreshRowUI(row);
+      try{
+        const raw = await callVisionAPI(preset, prompt, row.url, signal);
+        const cleaned = cleanAiDesc(raw);
+        if(!cleaned) throw new Error('返回内容无法解析出描述');
+        row.desc = cleaned; row.status='done';
+      }catch(err){
+        if(aiAbort || err.name==='AbortError') return;
+        row.status='error'; failed++;
+      }
+      done++; onTick(done, failed); refreshRowUI(row);
+    }
+  }
+  const workers = Array.from({length: Math.min(AI_CONCURRENCY, pending.length)}, worker);
+  await Promise.all(workers);
+  return {done, failed};
+}
+// 合并调用：把待生成的图按 AI_MERGE_BATCH_SIZE 分批，每批一次请求。
+// 一批里只要行数对不上就整批标记失败——按位置瞎对的话错得更隐蔽，不如让人重试。
+async function runAiMerged(pending, preset, prompt, signal, onTick){
+  let done = 0, failed = 0;
+  for(let i=0; i<pending.length; i+=AI_MERGE_BATCH_SIZE){
+    if(aiAbort) break;
+    const batch = pending.slice(i, i+AI_MERGE_BATCH_SIZE).filter(row=>pubItems.includes(row));
+    if(!batch.length) continue;
+    batch.forEach(row=>{ row.status='loading'; refreshRowUI(row); });
+    try{
+      const lines = await callVisionAPIBatch(preset, prompt, batch, signal);
+      if(lines.length !== batch.length) throw new Error(`返回了 ${lines.length} 行，和这批 ${batch.length} 张图对不上`);
+      batch.forEach((row, j)=>{
+        const cleaned = cleanAiDesc(lines[j]);
+        if(cleaned){ row.desc = cleaned; row.status='done'; } else { row.status='error'; failed++; }
+        done++; refreshRowUI(row);
+      });
+    }catch(err){
+      if(aiAbort || err.name==='AbortError') break;
+      batch.forEach(row=>{ row.status='error'; failed++; done++; refreshRowUI(row); });
+    }
+    onTick(done, failed);
+  }
+  return {done, failed};
+}
 $('aiRunBtn').addEventListener('click', async ()=>{
   const preset = presets.find(p=>p.id===activePresetId);
   if(!preset){ showToast('先选一个视觉 API 预设，没有的话点右上角齿轮添加'); return; }
@@ -2757,24 +2875,13 @@ $('aiRunBtn').addEventListener('click', async ()=>{
   if(!pending.length){ showToast('没有需要生成描述的表情（描述为空的才会生成）'); return; }
   const prompt = $('aiPromptInput').value.trim() || DEFAULT_PROMPT;
   aiRunning=true; aiAbort=false; aiController=new AbortController(); updateAiButtons();
-  let done=0, failed=0; const total=pending.length;
+  const total=pending.length;
   $('aiProgress').style.display='flex';
-  for(const row of pending){
-    if(aiAbort) break;
-    // 生成过程中用户可能把这行删了（批量删除），写回去只会丢进一个已经脱钩的对象
-    if(!pubItems.includes(row)){ done++; continue; }
-    row.status='loading'; refreshRowUI(row);
-    try{
-      const raw = await callVisionAPI(preset, prompt, row.url, aiController.signal);
-      const cleaned = cleanAiDesc(raw);
-      if(!cleaned) throw new Error('返回内容无法解析出描述');
-      row.desc = cleaned; row.status='done';
-    }
-    catch(err){ if(aiAbort || err.name==='AbortError') break; row.status='error'; failed++; }
-    done++;
-    $('aiProgress').innerHTML = `<span>已完成 <b>${done}</b> / ${total}</span><span>失败 <b>${failed}</b> 条</span>`;
-    refreshRowUI(row);
-  }
+  $('aiProgress').innerHTML = `<span>已完成 <b>0</b> / ${total}</span><span>失败 <b>0</b> 条</span>`;
+  const onTick = (done, failed) => { $('aiProgress').innerHTML = `<span>已完成 <b>${done}</b> / ${total}</span><span>失败 <b>${failed}</b> 条</span>`; };
+  const { failed } = aiMode === 'merged'
+    ? await runAiMerged(pending, preset, prompt, aiController.signal, onTick)
+    : await runAiConcurrent(pending, preset, prompt, aiController.signal, onTick);
   aiRunning=false; aiController=null; updateAiButtons();
   renderPubItems();
   if(aiAbort) showToast('已停止');
