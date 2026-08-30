@@ -143,20 +143,29 @@ Deno.serve(async (req) => {
 
     const declared = Number(res.headers.get('content-length') || '0');
     if (declared && declared > MAX_BYTES) return fail(413, 'image too large');
+    if (!res.body) return fail(502, 'empty body');
 
-    // content-length 可能不准或缺失，边读边数，超了就断开
-    const buf = new Uint8Array(await res.arrayBuffer());
-    if (buf.byteLength > MAX_BYTES) return fail(413, 'image too large');
-
-    return new Response(buf, {
-      headers: {
-        ...CORS,
-        'Content-Type': type,
-        'Content-Length': String(buf.byteLength),
-        // 同一张图会被反复请求（每次生成卡片都要），让 CDN 和浏览器扛住
-        'Cache-Control': 'public, max-age=86400, s-maxage=604800, immutable',
+    // 流式转发，不把整张图读进内存 —— 这样内存占用只跟单个分片有关（几十 KB），
+    // 而不是跟图片大小有关。8MB 的图也不会在函数里堆出 8MB 常驻。
+    // 顺带边转边数：content-length 可能缺失或撒谎，超了就直接掐断这条流。
+    let seen = 0;
+    const capped = res.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, ctrl) {
+        seen += chunk.byteLength;
+        if (seen > MAX_BYTES) { ctrl.error(new Error('image too large')); return; }
+        ctrl.enqueue(chunk);
       },
-    });
+    }));
+
+    const headers: Record<string, string> = {
+      ...CORS,
+      'Content-Type': type,
+      // 同一张图会被反复请求（每次生成卡片都要），让 CDN 和浏览器扛住，
+      // 别每次都真去源站取一遍 —— 这是省流量额度的关键
+      'Cache-Control': 'public, max-age=86400, s-maxage=604800, immutable',
+    };
+    if (declared) headers['Content-Length'] = String(declared);
+    return new Response(capped, { headers });
   } catch (e) {
     return fail(504, 'fetch failed: ' + (e instanceof Error ? e.message : String(e)));
   } finally {
