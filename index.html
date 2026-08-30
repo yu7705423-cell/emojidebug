@@ -294,6 +294,10 @@
   /* P3: long-press peek */
   .peek-mask{position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:70; display:none; align-items:center; justify-content:center; padding:14px;}
   .peek-mask.show{display:flex;}
+  /* 卡片和"点击空白处关闭"外面这层必须撑满，否则它作为 flex 子项会按内容收缩 ——
+     宽度被那行提示文字决定（一百多 px），里面 .peek-card 的 width:100% 就只有那么宽，
+     max-width 再大也没用。这个坑让弹层一直很小，改多少次上限都没反应。 */
+  .peek-wrap{width:100%; display:flex; flex-direction:column; align-items:center;}
   .peek-card{width:100%; max-width:420px; background:var(--bg); border-radius:16px; overflow:hidden; box-shadow:0 24px 60px rgba(0,0,0,.35); transform:scale(.92); opacity:0; transition:transform .18s cubic-bezier(.2,.8,.4,1), opacity .18s ease; -webkit-touch-callout:none; -webkit-user-select:none; user-select:none;}
   .peek-card img{-webkit-touch-callout:none; -webkit-user-drag:none; pointer-events:none;}
   .peek-mask.show .peek-card{transform:scale(1); opacity:1;}
@@ -780,7 +784,7 @@
 
   <!-- P3: long-press card preview -->
   <div class="peek-mask" id="peekMask">
-    <div>
+    <div class="peek-wrap">
       <div class="peek-card" id="peekCard"></div>
       <div class="peek-hint">点击空白处关闭</div>
     </div>
