@@ -1091,7 +1091,7 @@ async function loadCollections(){
   }
   // 标签 / 使用权限：collections_with_stats 是数据库里早就建好的视图，给
   // collections 表加列不会自动出现在视图里，所以单独从原表按 id 查一遍拼回去。
-  // 查询失败（比如 sql/tags_and_permissions.sql 还没在 Supabase 里执行过、
+  // 查询失败（比如这几列的建表语句还没在 Supabase 里执行过、
   // 列压根不存在）时这里直接吞掉错误——旧数据/旧库本来就应该退回安全默认值，
   // 不能因为这几个新字段让整个作品列表加载失败。
   const permByCollection = {};
@@ -1546,7 +1546,7 @@ function waitForCardImages(node){
 // 图床只要不返回 Access-Control-Allow-Origin，这一步就会被浏览器拦掉 —— 而且是
 // 静默失败：不抛异常，只是把那一格画成空白。这是浏览器的安全边界，纯前端绕不过去
 // （fetch 同样被拦；不带 crossOrigin 虽然能画但会污染画布，连导出都做不了），
-// 只能让服务端代取一次，见 supabase/functions/img-proxy/。
+// 只能让服务端代取一次 —— 也就是 Supabase 上那个 img-proxy Edge Function。
 const IMAGE_PROXY_URL = SUPABASE_URL + '/functions/v1/img-proxy';
 function proxiedUrl(u){ return IMAGE_PROXY_URL + '?url=' + encodeURIComponent(u); }
 // 用和 html2canvas 完全一样的方式探一张图：能这样加载成功，它就能被画进画布。
