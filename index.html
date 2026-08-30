@@ -2300,16 +2300,16 @@ function peekCoverHtml(emojis){
 }
 // 弹层宽度不写死，每次打开按当前视口现算 —— 之前钉死在一个像素值上，
 // 手机上还算合适，到了 iPad / 宽屏就只占屏幕一小块，看着特别小。
-// 三个约束取最小：
+// 不设上限，能占多大占多大，两个约束取小的那个：
 //   · 屏幕宽度（留一点边）
 //   · 屏幕高度（封面高 = 宽 × rows/cols，加上下面文字区不能超出屏幕。
-//     所以 1 张图那种正方形封面会自动比 3×2 的窄，不会顶出去）
-//   · 一个上限，免得在大屏上大到不像个"预览"
-const PEEK_BODY_H = 118, PEEK_GAP = 28, PEEK_MAX = 560;
+//     所以 1 张图那种正方形封面会自动比 3×2 的窄，横屏时也会被高度先卡住，
+//     不会顶出屏幕）
+const PEEK_BODY_H = 118, PEEK_GAP = 28;
 function peekCardWidth(cols, rows){
   const byWidth  = window.innerWidth * 0.94;
   const byHeight = (window.innerHeight - PEEK_GAP - PEEK_BODY_H) / (rows / cols);
-  return Math.max(240, Math.round(Math.min(byWidth, byHeight, PEEK_MAX)));
+  return Math.max(240, Math.round(Math.min(byWidth, byHeight)));
 }
 function showPeek(id){
   const c = collections.find(x=>x.id===id); if(!c) return;
