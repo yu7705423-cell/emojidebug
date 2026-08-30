@@ -292,9 +292,9 @@
   .ig-grid-wrap{margin-top:14px;}
 
   /* P3: long-press peek */
-  .peek-mask{position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:70; display:none; align-items:center; justify-content:center; padding:20px;}
+  .peek-mask{position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:70; display:none; align-items:center; justify-content:center; padding:14px;}
   .peek-mask.show{display:flex;}
-  .peek-card{width:100%; max-width:360px; background:var(--bg); border-radius:16px; overflow:hidden; box-shadow:0 24px 60px rgba(0,0,0,.35); transform:scale(.92); opacity:0; transition:transform .18s cubic-bezier(.2,.8,.4,1), opacity .18s ease; -webkit-touch-callout:none; -webkit-user-select:none; user-select:none;}
+  .peek-card{width:100%; max-width:420px; background:var(--bg); border-radius:16px; overflow:hidden; box-shadow:0 24px 60px rgba(0,0,0,.35); transform:scale(.92); opacity:0; transition:transform .18s cubic-bezier(.2,.8,.4,1), opacity .18s ease; -webkit-touch-callout:none; -webkit-user-select:none; user-select:none;}
   .peek-card img{-webkit-touch-callout:none; -webkit-user-drag:none; pointer-events:none;}
   .peek-mask.show .peek-card{transform:scale(1); opacity:1;}
   .peek-body{padding:14px 16px 16px;}
@@ -2279,16 +2279,12 @@ function renderItemsGrid(container, items, emptyText, action){
 }
 
 /* ===================== P3: long-press peek preview ===================== */
-// 长按预览的封面：最多铺 6 张。
-// 这里刻意不跟分享卡片共用 GRID_LAYOUTS —— 两边的诉求相反：
-// 分享卡片是要横向铺满的一版图，3 列正好；长按预览是"看清楚"，
-// 弹层本来就窄，再排 3 列每张只剩 99px，比原来 4 格时的 150px 还小，
-// 预览反而看不清。所以这里固定 2 列（单张除外），每张约 174px，比改之前更大，
-// 同时仍然能看到 6 张。
+// 长按预览的封面：最多铺 6 张，3 列 2 行，格数跟分享卡片共用同一张 GRID_LAYOUTS 表。
+// 弹层已经尽量放宽（见 .peek-card / .peek-mask），但 3 列摆在手机屏上单格也就
+// 120px 左右 —— 这是屏幕宽度决定的，想再大只能减列数。
 function peekCoverHtml(emojis){
   const list = (emojis||[]).slice(0, 6);
-  const cols = list.length <= 1 ? 1 : 2;
-  const rows = Math.ceil(Math.max(list.length,1) / cols);
+  const [cols, rows] = GRID_LAYOUTS[list.length] || [3,2];
   const cells = list.slice(0, cols*rows);
   while(cells.length < cols*rows) cells.push(null);
   const inner = cells.map(e=> e
