@@ -170,6 +170,10 @@
   .coll-cover.quad .coll-cover-inner{grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr;}
   .coll-cover-cell{position:relative; overflow:hidden; background:var(--bg-elev);}
   .coll-cover-cell img{position:absolute; inset:0; width:100%; height:100%; object-fit:cover; display:block;}
+  /* 长按预览的封面：最多 6 格，比例跟着行列数走（3×2 就是 3:2，不再强行压成正方形） */
+  .peek-cover{width:100%; position:relative; overflow:hidden; background:var(--border-soft);}
+  .peek-cover-inner{position:absolute; inset:0; display:grid; gap:1px;}
+  .coll-cover-cell.blank{background:var(--bg);}
   .coll-name{font-family:var(--font-display); font-weight:500; font-size:14px; letter-spacing:.02em; margin-top:8px;}
   .coll-sub{font-size:11px; color:var(--text-dim); margin-top:2px;}
   .coll-stats{display:flex; align-items:center; gap:10px; font-size:11px; color:var(--text-faint); margin-top:3px;}
@@ -1538,15 +1542,69 @@ function waitForCardImages(node){
   }));
   return Promise.all([...imgWaits, ...bgWaits]);
 }
+// html2canvas 是开着 useCORS 跑的，也就是它取每张图时都会带 crossOrigin='anonymous'。
+// 图床只要不返回 Access-Control-Allow-Origin，这一步就会被浏览器拦掉 —— 而且是
+// 静默失败：不抛异常，只是把那一格画成空白。这是浏览器的安全边界，纯前端绕不过去
+// （fetch 同样被拦；不带 crossOrigin 虽然能画但会污染画布，连导出都做不了），
+// 只能让服务端代取一次，见 supabase/functions/img-proxy/。
+const IMAGE_PROXY_URL = SUPABASE_URL + '/functions/v1/img-proxy';
+function proxiedUrl(u){ return IMAGE_PROXY_URL + '?url=' + encodeURIComponent(u); }
+// 用和 html2canvas 完全一样的方式探一张图：能这样加载成功，它就能被画进画布。
+// 顺带把这张图暖进"跨域模式"的缓存，等下 html2canvas 再取就是缓存命中。
+function canExportImage(u){
+  return new Promise(resolve=>{
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = ()=>resolve(true);
+    img.onerror = ()=>resolve(false);
+    img.src = u;
+  });
+}
+// 找出这张图"能画进画布"的地址。先试直连：图床本身就允许跨域的话直接用原图，
+// 不该白白占用代理流量；直连不行才换代理；代理也不行（比如函数还没部署）就返回
+// null，交给调用方按"这张画不出来"处理 —— 绝不能因为代理没部署反而全变空白。
+async function exportableUrl(u){
+  if(!u) return null;
+  if(/^data:/i.test(u)) return u;              // 内嵌图，同源，本来就没有跨域问题
+  if(await canExportImage(u)) return u;
+  const viaProxy = proxiedUrl(u);
+  if(await canExportImage(viaProxy)) return viaProxy;
+  return null;
+}
+// 截图前把节点里所有图片地址换成"画得出来"的那个，返回仍然画不出来的张数
+async function makeCardImagesExportable(node){
+  const bgEls = Array.from(node.querySelectorAll('[data-bg-url]'));
+  const imgEls = Array.from(node.querySelectorAll('img[src]'));
+  const urls = new Set();
+  bgEls.forEach(el=>{ if(el.dataset.bgUrl) urls.add(el.dataset.bgUrl); });
+  imgEls.forEach(el=>{ const s = el.getAttribute('src'); if(s) urls.add(s); });
+  const resolved = new Map();
+  await Promise.all(Array.from(urls).map(async u=>{ resolved.set(u, await exportableUrl(u)); }));
+  bgEls.forEach(el=>{
+    const good = resolved.get(el.dataset.bgUrl);
+    if(good){ el.dataset.bgUrl = good; el.style.backgroundImage = `url('${cssUrlSafe(good)}')`; }
+    else el.style.backgroundImage = 'none';   // 画不出来就别留半张，露出占位底色
+  });
+  imgEls.forEach(el=>{
+    const src = el.getAttribute('src');
+    const good = resolved.get(src);
+    if(good){ if(good !== src) el.src = good; }
+    else el.style.visibility = 'hidden';
+  });
+  return Array.from(resolved.values()).filter(v=>!v).length;
+}
 async function renderCardToBlob(node){
   if(typeof html2canvas === 'undefined') throw new Error('图片生成组件没加载成功，刷新页面再试');
   document.body.appendChild(node);
   try{
+    // 顺序不能反：先把地址换成能用的，再等图加载
+    const blocked = await makeCardImagesExportable(node);
     await waitForCardImages(node);
     try{ await document.fonts.ready; }catch(e){}
     await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
     const canvas = await html2canvas(node, { backgroundColor:'#ffffff', useCORS:true, scale:2 });
-    return await new Promise(res=>canvas.toBlob(res, 'image/png'));
+    const blob = await new Promise(res=>canvas.toBlob(res, 'image/png'));
+    return { blob, blocked };
   } finally {
     node.remove();
   }
@@ -1589,8 +1647,11 @@ function openShareSheet(opts){
   $('shareCardBtn').addEventListener('click', async ()=>{
     const btn = $('shareCardBtn'); btn.disabled = true; const oldTxt = btn.textContent; btn.textContent = '生成中…';
     try{
-      const blob = await renderCardToBlob(opts.buildCardNode());
+      const { blob, blocked } = await renderCardToBlob(opts.buildCardNode());
       await shareOrDownloadImageBlob(blob, opts.filename, opts.title);
+      // 还是有图取不回来时一定要说一声。卡片本身是生成成功的，但那几格是空的，
+      // 不讲清楚用户只会以为功能坏了。
+      if(blocked > 0) showToast(`有 ${blocked} 张图取不回来，卡片里那几格是空的`);
     }catch(e){
       console.warn('生成分享卡片失败', e);
       showToast('图片可能来自其他站点，暂时生成不了，可以截图保存');
@@ -1611,10 +1672,11 @@ function openShareSheet(opts){
 //   · 格子之间的缝用内层元素四边各让 1px 做出来，不依赖 gap。
 // 每格数量按内容多少自适应：够 5 张就铺成 ins 那样的 3×2，不够就退成 2×2 /
 // 一行 3 张 / 一行 2 张 / 单张大图，避免出现一大片空格子。
-const SHARE_GRID_LAYOUTS = { 0:[1,1], 1:[1,1], 2:[2,1], 3:[3,1], 4:[2,2], 5:[3,2], 6:[3,2] };
+// 首页长按预览（peekCoverHtml）也用这张表，两处保持一致。
+const GRID_LAYOUTS = { 0:[1,1], 1:[1,1], 2:[2,1], 3:[3,1], 4:[2,2], 5:[3,2], 6:[3,2] };
 function shareGridExport(emojis){
   const list = (emojis||[]).slice(0, 6);
-  const [cols, rows] = SHARE_GRID_LAYOUTS[list.length] || [3,2];
+  const [cols, rows] = GRID_LAYOUTS[list.length] || [3,2];
   const cells = list.slice(0, cols*rows);
   while(cells.length < cols*rows) cells.push(null);
   const side = (100/cols).toFixed(4);
@@ -2217,11 +2279,26 @@ function renderItemsGrid(container, items, emptyText, action){
 }
 
 /* ===================== P3: long-press peek preview ===================== */
+// 长按预览的封面：最多铺 6 张，格数和分享卡片共用同一张 GRID_LAYOUTS 表。
+// 这里是页面内渲染，不过 html2canvas，所以可以放心用 grid；只有导出卡片那边
+// 才需要那套 float + padding-top 的老写法。
+function peekCoverHtml(emojis){
+  const list = (emojis||[]).slice(0, 6);
+  const [cols, rows] = GRID_LAYOUTS[list.length] || [3,2];
+  const cells = list.slice(0, cols*rows);
+  while(cells.length < cols*rows) cells.push(null);
+  const inner = cells.map(e=> e
+    ? `<div class="coll-cover-cell"><img src="${esc(e.url)}" onerror="this.style.opacity=0"></div>`
+    : `<div class="coll-cover-cell blank"></div>`).join('');
+  return `<div class="peek-cover" style="padding-top:${(rows/cols*100).toFixed(4)}%;">
+    <div class="peek-cover-inner" style="grid-template-columns:repeat(${cols},1fr); grid-template-rows:repeat(${rows},1fr);">${inner}</div>
+  </div>`;
+}
 function showPeek(id){
   const c = collections.find(x=>x.id===id); if(!c) return;
   const avatarSrc = (c.authorId===currentUserId) ? (getMyHdAvatar() || avatarDataUrl) : c.authorAvatarUrl;
   $('peekCard').innerHTML = `
-    <div>${coverHtml(c.emojis, true)}</div>
+    <div>${peekCoverHtml(c.emojis)}</div>
     <div class="peek-body">
       <div class="peek-head">
         <div class="peek-avatar">${avatarSrc?`<img src="${esc(avatarSrc)}">`:`<span>${esc(c.author.slice(0,1))}</span>`}</div>
