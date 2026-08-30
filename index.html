@@ -1544,30 +1544,62 @@ function waitForCardImages(node){
 }
 // html2canvas 是开着 useCORS 跑的，也就是它取每张图时都会带 crossOrigin='anonymous'。
 // 图床只要不返回 Access-Control-Allow-Origin，这一步就会被浏览器拦掉 —— 而且是
-// 静默失败：不抛异常，只是把那一格画成空白，用户拿到一张有格子没图的卡片，
-// 完全不知道发生了什么。这是浏览器的安全边界，前端绕不过去（fetch 同样被拦，
-// 不带 crossOrigin 虽然能画但会污染画布，连导出都做不了）。
-// 所以截图前先按同样的方式探一遍，好把"这几张画不进去"如实说出来。
-function countBlockedImages(node){
-  const urls = new Set();
-  node.querySelectorAll('[data-bg-url]').forEach(el=>{ if(el.dataset.bgUrl) urls.add(el.dataset.bgUrl); });
-  node.querySelectorAll('img[src]').forEach(el=>{ if(el.src) urls.add(el.src); });
-  return Promise.all(Array.from(urls).map(u=> new Promise(resolve=>{
-    // data: 开头的是内嵌图，同源，永远没有跨域问题，不用探
-    if(/^data:/i.test(u)) return resolve(0);
+// 静默失败：不抛异常，只是把那一格画成空白。这是浏览器的安全边界，纯前端绕不过去
+// （fetch 同样被拦；不带 crossOrigin 虽然能画但会污染画布，连导出都做不了），
+// 只能让服务端代取一次，见 supabase/functions/img-proxy/。
+const IMAGE_PROXY_URL = SUPABASE_URL + '/functions/v1/img-proxy';
+function proxiedUrl(u){ return IMAGE_PROXY_URL + '?url=' + encodeURIComponent(u); }
+// 用和 html2canvas 完全一样的方式探一张图：能这样加载成功，它就能被画进画布。
+// 顺带把这张图暖进"跨域模式"的缓存，等下 html2canvas 再取就是缓存命中。
+function canExportImage(u){
+  return new Promise(resolve=>{
     const img = new Image();
     img.crossOrigin = 'anonymous';
-    img.onload = ()=>resolve(0);
-    img.onerror = ()=>resolve(1);
+    img.onload = ()=>resolve(true);
+    img.onerror = ()=>resolve(false);
     img.src = u;
-  }))).then(r=>r.reduce((a,b)=>a+b, 0));
+  });
+}
+// 找出这张图"能画进画布"的地址。先试直连：图床本身就允许跨域的话直接用原图，
+// 不该白白占用代理流量；直连不行才换代理；代理也不行（比如函数还没部署）就返回
+// null，交给调用方按"这张画不出来"处理 —— 绝不能因为代理没部署反而全变空白。
+async function exportableUrl(u){
+  if(!u) return null;
+  if(/^data:/i.test(u)) return u;              // 内嵌图，同源，本来就没有跨域问题
+  if(await canExportImage(u)) return u;
+  const viaProxy = proxiedUrl(u);
+  if(await canExportImage(viaProxy)) return viaProxy;
+  return null;
+}
+// 截图前把节点里所有图片地址换成"画得出来"的那个，返回仍然画不出来的张数
+async function makeCardImagesExportable(node){
+  const bgEls = Array.from(node.querySelectorAll('[data-bg-url]'));
+  const imgEls = Array.from(node.querySelectorAll('img[src]'));
+  const urls = new Set();
+  bgEls.forEach(el=>{ if(el.dataset.bgUrl) urls.add(el.dataset.bgUrl); });
+  imgEls.forEach(el=>{ const s = el.getAttribute('src'); if(s) urls.add(s); });
+  const resolved = new Map();
+  await Promise.all(Array.from(urls).map(async u=>{ resolved.set(u, await exportableUrl(u)); }));
+  bgEls.forEach(el=>{
+    const good = resolved.get(el.dataset.bgUrl);
+    if(good){ el.dataset.bgUrl = good; el.style.backgroundImage = `url('${cssUrlSafe(good)}')`; }
+    else el.style.backgroundImage = 'none';   // 画不出来就别留半张，露出占位底色
+  });
+  imgEls.forEach(el=>{
+    const src = el.getAttribute('src');
+    const good = resolved.get(src);
+    if(good){ if(good !== src) el.src = good; }
+    else el.style.visibility = 'hidden';
+  });
+  return Array.from(resolved.values()).filter(v=>!v).length;
 }
 async function renderCardToBlob(node){
   if(typeof html2canvas === 'undefined') throw new Error('图片生成组件没加载成功，刷新页面再试');
   document.body.appendChild(node);
   try{
+    // 顺序不能反：先把地址换成能用的，再等图加载
+    const blocked = await makeCardImagesExportable(node);
     await waitForCardImages(node);
-    const blocked = await countBlockedImages(node);
     try{ await document.fonts.ready; }catch(e){}
     await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
     const canvas = await html2canvas(node, { backgroundColor:'#ffffff', useCORS:true, scale:2 });
@@ -1617,9 +1649,9 @@ function openShareSheet(opts){
     try{
       const { blob, blocked } = await renderCardToBlob(opts.buildCardNode());
       await shareOrDownloadImageBlob(blob, opts.filename, opts.title);
-      // 有图被图床的跨域策略挡住时一定要说一声。卡片本身是生成成功的，
-      // 但那几格是空的，不讲清楚用户只会以为功能坏了。
-      if(blocked > 0) showToast(`有 ${blocked} 张图所在的图床不允许跨域引用，卡片里那几格是空的`);
+      // 还是有图取不回来时一定要说一声。卡片本身是生成成功的，但那几格是空的，
+      // 不讲清楚用户只会以为功能坏了。
+      if(blocked > 0) showToast(`有 ${blocked} 张图取不回来，卡片里那几格是空的`);
     }catch(e){
       console.warn('生成分享卡片失败', e);
       showToast('图片可能来自其他站点，暂时生成不了，可以截图保存');
