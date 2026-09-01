@@ -216,15 +216,18 @@
   .ring-bar{height:3px; border-radius:2px; background:var(--border-soft); margin-top:6px; overflow:hidden;}
   .ring-bar i{display:block; height:100%; width:0; background:var(--ink);}
   /* 头像框合成器 */
-  .af-stage{position:relative; width:100%; max-width:300px; margin:0 auto; aspect-ratio:1/1; background:var(--bg-elev); border:1px solid var(--border-soft); overflow:hidden; touch-action:none; cursor:grab;}
-  .af-stage canvas{position:absolute; inset:0; width:100%; height:100%; display:block;}
-  /* 显示用的两层图，盖在画布上面。画布只留着导出用 —— GIF 画进画布只会定格在
-     第一帧，<img> 才会正常动。圆形只裁头像那一层，头像框图片永远整张显示。 */
-  .af-layer{position:absolute; display:block; pointer-events:none; max-width:none;}
-  .af-layer[hidden]{display:none;}
-  .af-av-clip{position:absolute; inset:0; overflow:hidden;}
-  .af-av-clip.circle{border-radius:50%;}
-  .af-frame-layer{inset:0; width:100%; height:100%;}
+ .af-stage{position:relative; width:100%; max-width:300px; margin:0 auto; aspect-ratio:1/1; background:var(--bg-elev); border:1px solid var(--border-soft); overflow:hidden; touch-action:none; cursor:grab;}
+.af-stage canvas{position:absolute; inset:0; width:100%; height:100%; display:block;}
+/* 显示用的两层图，盖在画布上面。画布只留着导出用 —— GIF 画进画布只会定格在
+   第一帧，<img> 才会正常动。头像现在固定铺满、只按形状裁一刀；缩放和拖动
+   都挪给了头像框那一层——头像框天生可能比头像大出一截，让它自己去对准
+   固定不动的头像，比反过来逼用户硬凑头像位置直观得多。 */
+.af-layer{position:absolute; display:block; pointer-events:none; max-width:none;}
+.af-layer[hidden]{display:none;}
+.af-av-clip{position:absolute; inset:0; overflow:hidden;}
+.af-av-clip.circle{border-radius:50%;}
+.af-av-img{position:absolute; inset:0; width:100%; height:100%; object-fit:cover; display:block; pointer-events:none;}
+
   .af-hint{font-size:11px; color:var(--text-faint); text-align:center; margin-top:8px; line-height:1.6;}
   .af-ctl{display:flex; align-items:center; gap:10px; margin-top:12px;}
   .af-ctl label{font-size:11.5px; color:var(--text-dim); flex-shrink:0;}
@@ -3801,12 +3804,12 @@ function avatarFrameUiHtml(p){
   return `
       <div class="af-stage" id="${p}Stage">
         <canvas id="${p}Canvas" width="720" height="720"></canvas>
-        <div class="af-av-clip" id="${p}AvClip"><img class="af-layer af-av-layer" id="${p}AvLayer" alt="" hidden></div>
+        <div class="af-av-clip" id="${p}AvClip"><img class="af-av-img" id="${p}AvLayer" alt="" hidden></div>
         <img class="af-layer af-frame-layer" id="${p}FrLayer" alt="" hidden>
       </div>
-      <p class="af-hint">拖动头像可以移动位置，用下面的滑块缩放，把头像对准框。<br>圆形 / 方形指的是<b>你的头像</b>会被裁成什么形状，头像框图片本身不会被裁。</p>
+      <p class="af-hint">头像固定居中，只能选圆形还是方形；拖动、缩放调的是头像框，把框上的洞对准头像就行。<br>圆形 / 方形指的是<b>你的头像</b>会被裁成什么形状，头像框图片本身不会被裁。</p>
       <p class="af-hint" id="${p}GifNote" hidden>这是动图：预览里会动，但保存下来的合成图是静态的（只有第一帧）。</p>
-      <div class="af-ctl"><label>缩放</label><input type="range" id="${p}Zoom" min="50" max="300" value="100"></div>
+      <div class="af-ctl"><label>缩放头像框</label><input type="range" id="${p}Zoom" min="40" max="400" value="100"></div>
       <div class="btn-row">
         <button class="btn-outline" id="${p}ShapeBtn">头像裁成圆形</button>
         <button class="btn-outline" id="${p}PickBtn">换我的头像</button>
@@ -3817,6 +3820,7 @@ function avatarFrameUiHtml(p){
       </div>`;
 }
 
+
 const isGifUrl = u => /^data:image\/gif/i.test(u||'') || /\.gif($|[?#])/i.test(u||'');
 
 function setupAvatarFrame(url, title, p){
@@ -3825,10 +3829,11 @@ function setupAvatarFrame(url, title, p){
   const S = cv.width;
   const st = { avatar:null, frame:null, avatarSrc:'', scale:1, x:0, y:0, circle:false };
 
-  // 头像画多大、画在哪。画布和预览图层共用这一份计算，两边不会对不上。
-  function geom(img){
-    // 先按“铺满”算基准倍率，再乘用户的缩放，这样任何比例的图都不会留白边
-    const base = Math.max(S/img.naturalWidth, S/img.naturalHeight);
+  // 头像框画多大、画在哪。以"完整显示、长边贴齐画布"为基准（不裁边），
+  // 缩放滑块和拖动都在这个基准上叠加——头像框天生可能比头像大出一截，
+  // 允许明显超过画布，也允许缩得比画布小。
+  function frameGeom(img){
+    const base = Math.min(S/img.naturalWidth, S/img.naturalHeight);
     const w = img.naturalWidth * base * st.scale, h = img.naturalHeight * base * st.scale;
     return { w, h, x:(S-w)/2 + st.x, y:(S-h)/2 + st.y };
   }
@@ -3838,17 +3843,23 @@ function setupAvatarFrame(url, title, p){
     // 变成灰角而不是透明。预览时透出的是 .af-stage 自己的底色，看起来一样。
     ctx.clearRect(0,0,S,S);
     if(st.avatar){
-      const g = geom(st.avatar);
+      // 头像固定居中铺满整块画布（按短边裁，不留白边），不再跟着缩放/拖动走，
+      // 唯一能调的是下面的圆形/方形开关
+      const base = Math.max(S/st.avatar.naturalWidth, S/st.avatar.naturalHeight);
+      const w = st.avatar.naturalWidth*base, h = st.avatar.naturalHeight*base;
       ctx.save();
       if(st.circle){ ctx.beginPath(); ctx.arc(S/2, S/2, S/2, 0, Math.PI*2); ctx.clip(); }
-      ctx.drawImage(st.avatar, g.x, g.y, g.w, g.h);
+      ctx.drawImage(st.avatar, (S-w)/2, (S-h)/2, w, h);
       ctx.restore();
+    }
+    if(st.frame){
+      const g = frameGeom(st.frame);
+      ctx.drawImage(st.frame, g.x, g.y, g.w, g.h);
       // 同一组数值换成百分比给预览图层用，画布尺寸怎么变都不用跟着改
       const pc = v => (v*100/S)+'%';
-      avLayer.style.width = pc(g.w); avLayer.style.height = pc(g.h);
-      avLayer.style.left  = pc(g.x); avLayer.style.top    = pc(g.y);
+      frLayer.style.width = pc(g.w); frLayer.style.height = pc(g.h);
+      frLayer.style.left  = pc(g.x); frLayer.style.top    = pc(g.y);
     }
-    if(st.frame) ctx.drawImage(st.frame, 0, 0, S, S);
   }
 
   function refreshGifNote(){
@@ -3869,7 +3880,7 @@ function setupAvatarFrame(url, title, p){
     draw();
   })();
 
-  // 拖动移动头像
+  // 拖动移动头像框（不再是头像——头像现在是固定的那一层）
   let dragging = false, lastX = 0, lastY = 0;
   stage.addEventListener('pointerdown', e=>{
     dragging = true; lastX = e.clientX; lastY = e.clientY;
@@ -3891,7 +3902,7 @@ function setupAvatarFrame(url, title, p){
   $(p+'Zoom').addEventListener('input', e=>{ st.scale = e.target.value/100; draw(); });
   $(p+'ShapeBtn').addEventListener('click', ()=>{
     st.circle = !st.circle;
-    // 只裁头像那一层。以前是给整个 stage 加圆角，把头像框图片也一起削圆了
+    // 只裁头像那一层。头像框图片永远整张显示，不受这个开关影响
     clip.classList.toggle('circle', st.circle);
     $(p+'ShapeBtn').textContent = st.circle ? '头像裁成方形' : '头像裁成圆形';
     draw();
@@ -3905,7 +3916,7 @@ function setupAvatarFrame(url, title, p){
     st.avatarSrc = dataUrl;
     st.avatar = await loadImageForCanvas(dataUrl);
     if(st.avatar){ avLayer.src = st.avatar.src; avLayer.hidden = false; }
-    st.x = 0; st.y = 0; st.scale = 1; $(p+'Zoom').value = 100;
+    // 换头像不影响头像框已经调好的缩放/位置，这两个现在是独立的两件事
     refreshGifNote();
     draw();
     e.target.value = '';
@@ -3919,6 +3930,7 @@ function setupAvatarFrame(url, title, p){
     }
   });
 }
+
 
 // 发布/编辑头像框时先自己试戴一下 —— 图床不给跨域、或者框的透明区位置不对，
 // 在这一步就能看出来，不用等发出去别人来说“套不上”
