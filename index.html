@@ -658,6 +658,16 @@
     <div class="overlay-body" id="postEditorBody" style="padding:16px 18px;"></div>
   </div>
 
+  <!-- 头像框试戴：发布/编辑时先看效果，跟详情页用的是同一套合成代码 -->
+  <div class="overlay" id="afTryOverlay">
+    <div class="overlay-head">
+      <button class="icon-btn" id="afTryBackBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>
+      <div class="overlay-title">试戴看看</div>
+      <div style="width:34px;"></div>
+    </div>
+    <div class="overlay-body" id="afTryBody" style="padding:16px 18px;"></div>
+  </div>
+
   <div class="overlay" id="fontDetailOverlay">
     <div class="overlay-head">
       <button class="icon-btn" id="fontDetailBackBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>
@@ -1220,7 +1230,7 @@ let autoRefreshTimer = null;
 let refreshInFlight = false;
 function isBusyForRefresh(){
   if(currentPageId === 'publish') return true;
-  const overlayIds = ['detailOverlay','fontDetailOverlay','fontEditorOverlay','postDetailOverlay','postEditorOverlay','aiOverlay','settingsOverlay','userProfileOverlay'];
+  const overlayIds = ['detailOverlay','fontDetailOverlay','fontEditorOverlay','postDetailOverlay','postEditorOverlay','afTryOverlay','aiOverlay','settingsOverlay','userProfileOverlay'];
   if(overlayIds.some(id => { const el=$(id); return el && el.classList.contains('open'); })) return true;
   const sheetIds = ['dlSheetMask','pubSheetMask','confirmSheetMask','shareSheetMask','reportSheetMask','profileSheetMask','avatarCropMask','notifSheetMask'];
   if(sheetIds.some(id => { const el=$(id); return el && el.classList.contains('open'); })) return true;
@@ -3701,17 +3711,7 @@ function renderPostDetail(justToggled){
       <div class="key-row"><input class="field-input" id="ringUrlInput" readonly value="${esc(pt.url)}"><button class="icon-btn" id="ringCopyBtn" aria-label="复制">复制</button></div>`;
   } else if(pt.kind === 'avatar_frame'){
     bodyHtml = `
-      <div class="af-stage" id="afStage"><canvas id="afCanvas" width="720" height="720"></canvas></div>
-      <p class="af-hint">拖动头像可以移动位置，用下面的滑块缩放，把头像对准框</p>
-      <div class="af-ctl"><label>缩放</label><input type="range" id="afZoom" min="50" max="300" value="100"></div>
-      <div class="btn-row">
-        <button class="btn-outline" id="afShapeBtn">切换为圆形</button>
-        <button class="btn-outline" id="afPickBtn">换我的头像</button>
-      </div>
-      <input type="file" id="afFileInput" accept="image/*">
-      <div class="btn-row">
-        <button class="btn-solid" id="afSaveBtn">保存合成图</button>
-      </div>
+      ${avatarFrameUiHtml('af')}
       <p class="field-help">合成图只在你自己手机上生成，不会上传。想分享给别人看效果，直接发这张图就行。</p>
       <div class="field-label">头像框原图链接（下载用）</div>
       <div class="key-row"><input class="field-input" id="afUrlInput" readonly value="${esc(pt.url)}"><button class="icon-btn" id="afCopyBtn" aria-label="复制">复制</button></div>`;
@@ -3759,7 +3759,7 @@ function renderPostDetail(justToggled){
     });
   });
   if(pt.kind === 'ringtone') setupRingtone();
-  if(pt.kind === 'avatar_frame') setupAvatarFrame(pt);
+  if(pt.kind === 'avatar_frame') setupAvatarFrame(pt.url, pt.title, 'af');
 }
 
 /* ---- 铃声试听 ---- */
@@ -3789,8 +3789,25 @@ function setupRingtone(){
 /* ---- 头像框合成 ---- */
 // 底图（头像）画在下面、框画在上面，中间按形状裁一次。
 // 全程在本地 canvas 上完成，不上传任何东西。
-function setupAvatarFrame(pt){
-  const cv = $('afCanvas'), ctx = cv.getContext('2d'), stage = $('afStage');
+// 试戴那一坨（画布 + 缩放 + 形状 + 换头像 + 保存）详情页和发布页都要用，
+// 所以模板和逻辑都按 id 前缀参数化，两边共用一份，不复制第二遍。
+function avatarFrameUiHtml(p){
+  return `
+      <div class="af-stage" id="${p}Stage"><canvas id="${p}Canvas" width="720" height="720"></canvas></div>
+      <p class="af-hint">拖动头像可以移动位置，用下面的滑块缩放，把头像对准框</p>
+      <div class="af-ctl"><label>缩放</label><input type="range" id="${p}Zoom" min="50" max="300" value="100"></div>
+      <div class="btn-row">
+        <button class="btn-outline" id="${p}ShapeBtn">切换为圆形</button>
+        <button class="btn-outline" id="${p}PickBtn">换我的头像</button>
+      </div>
+      <input type="file" id="${p}FileInput" accept="image/*">
+      <div class="btn-row">
+        <button class="btn-solid" id="${p}SaveBtn">保存合成图</button>
+      </div>`;
+}
+
+function setupAvatarFrame(url, title, p){
+  const cv = $(p+'Canvas'), ctx = cv.getContext('2d'), stage = $(p+'Stage');
   const S = cv.width;
   const st = { avatar:null, frame:null, scale:1, x:0, y:0, circle:false };
 
@@ -3801,7 +3818,7 @@ function setupAvatarFrame(pt){
       ctx.save();
       if(st.circle){ ctx.beginPath(); ctx.arc(S/2, S/2, S/2, 0, Math.PI*2); ctx.clip(); }
       const img = st.avatar;
-      // 先按"铺满"算基准倍率，再乘用户的缩放，这样任何比例的图都不会留白边
+      // 先按“铺满”算基准倍率，再乘用户的缩放，这样任何比例的图都不会留白边
       const base = Math.max(S/img.naturalWidth, S/img.naturalHeight);
       const w = img.naturalWidth * base * st.scale, hgt = img.naturalHeight * base * st.scale;
       ctx.drawImage(img, (S-w)/2 + st.x, (S-hgt)/2 + st.y, w, hgt);
@@ -3811,7 +3828,7 @@ function setupAvatarFrame(pt){
   }
 
   (async ()=>{
-    st.frame  = await loadImageForCanvas(pt.url);
+    st.frame  = await loadImageForCanvas(url);
     st.avatar = await loadImageForCanvas(getMyHdAvatar() || avatarDataUrl || DEFAULT_AVATAR_BASE);
     if(!st.frame) showToast('头像框图片取不回来，可能是图床不允许跨域');
     draw();
@@ -3836,33 +3853,44 @@ function setupAvatarFrame(pt){
   stage.addEventListener('pointerup', endDrag);
   stage.addEventListener('pointercancel', endDrag);
 
-  $('afZoom').addEventListener('input', e=>{ st.scale = e.target.value/100; draw(); });
-  $('afShapeBtn').addEventListener('click', ()=>{
+  $(p+'Zoom').addEventListener('input', e=>{ st.scale = e.target.value/100; draw(); });
+  $(p+'ShapeBtn').addEventListener('click', ()=>{
     st.circle = !st.circle;
     stage.classList.toggle('circle', st.circle);
-    $('afShapeBtn').textContent = st.circle ? '切换为方形' : '切换为圆形';
+    $(p+'ShapeBtn').textContent = st.circle ? '切换为方形' : '切换为圆形';
     draw();
   });
-  $('afPickBtn').addEventListener('click', ()=>$('afFileInput').click());
-  $('afFileInput').addEventListener('change', async e=>{
+  $(p+'PickBtn').addEventListener('click', ()=>$(p+'FileInput').click());
+  $(p+'FileInput').addEventListener('change', async e=>{
     const file = e.target.files && e.target.files[0];
     if(!file) return;
     // 本地选的图直接读成 data URI —— 同源，不存在跨域问题，也不会上传
     const dataUrl = await new Promise(res=>{ const r = new FileReader(); r.onload = ()=>res(r.result); r.readAsDataURL(file); });
     st.avatar = await loadImageForCanvas(dataUrl);
-    st.x = 0; st.y = 0; st.scale = 1; $('afZoom').value = 100;
+    st.x = 0; st.y = 0; st.scale = 1; $(p+'Zoom').value = 100;
     draw();
     e.target.value = '';
   });
-  $('afSaveBtn').addEventListener('click', async ()=>{
+  $(p+'SaveBtn').addEventListener('click', async ()=>{
     try{
       const blob = await new Promise(res=>cv.toBlob(res, 'image/png'));
-      await shareOrDownloadImageBlob(blob, `${safeFilename(pt.title)}_头像.png`, pt.title);
+      await shareOrDownloadImageBlob(blob, `${safeFilename(title||'头像框')}_头像.png`, title||'头像框');
     }catch(e){
       showToast('生成失败，可以直接截图保存');
     }
   });
 }
+
+// 发布/编辑头像框时先自己试戴一下 —— 图床不给跨域、或者框的透明区位置不对，
+// 在这一步就能看出来，不用等发出去别人来说“套不上”
+function openAvatarFrameTry(url, title){
+  $('afTryBody').innerHTML = avatarFrameUiHtml('aft') +
+    '<p class="field-help">这是别人打开你这条内容时看到的效果，预览只在本地生成，不会上传。' +
+    '如果这里一直是空白，多半是图床不允许跨域，换个图床再发。</p>';
+  $('afTryOverlay').classList.add('open');
+  setupAvatarFrame(url, title, 'aft');
+}
+$('afTryBackBtn').addEventListener('click', ()=>$('afTryOverlay').classList.remove('open'));
 
 /* ===================== 「其他」：发布 / 编辑 ===================== */
 // 发布页那个「其他」面板里的四个入口
@@ -3926,11 +3954,12 @@ function openPostEditor(kind, existing){
     } else if(st.kind === 'avatar_frame'){
       fields = `<div class="field-label">头像框图片链接</div>
         <input class="field-input" id="peUrl" placeholder="https://…  建议透明底 PNG" value="${esc(st.url)}">
-        <p class="field-help">透明底的 PNG 效果最好，方形图。别人可以套自己的头像预览、也能下载这张原图。</p>`;
+        <div class="btn-row" style="margin-top:10px;"><button type="button" class="btn-outline" id="peTryBtn">试戴看看</button></div>
+        <p class="field-help">透明底的 PNG 效果最好，方形图。发之前先自己试戴一下，确认框能套上、图床也取得到图。别人可以套自己的头像预览、也能下载这张原图。</p>`;
     } else if(st.kind === 'tutorial'){
       fields = `<div class="field-label">正文</div>
         <div class="composer"><textarea class="field" id="peBody" placeholder="写点什么…" style="min-height:200px;">${esc(st.body)}</textarea></div>
-        <p class="field-help">只发和表情包 / 字体 / 头像相关的内容，无关内容会被删。</p>`;
+        <p class="field-help">只发和表情包 / 字体 / 头像相关的内容，无关内容会被删。禁止发引战、议论他人、评价作品相关内容，若出现将封号。</p>`;
     } else {
       fields = `<div class="field-label">链接</div>
         <input class="field-input" id="peLink" placeholder="GitHub 项目，或原作者的小红书等主页" value="${esc(st.link)}">
@@ -3986,6 +4015,12 @@ function openPostEditor(kind, existing){
       draw(); if(st.otherChecked){ const el=$('peOther'); if(el) el.focus(); }
     });
     const other = $('peOther'); if(other) other.addEventListener('input', e=>{ st.otherText = e.target.value; });
+    const tryBtn = $('peTryBtn');
+    if(tryBtn) tryBtn.addEventListener('click', ()=>{
+      sync();                                   // 先把刚敲进去的链接收回来
+      if(!st.url.trim()){ showToast('先填头像框图片链接'); return; }
+      openAvatarFrameTry(st.url.trim(), st.title.trim() || '头像框');
+    });
 
     $('peSubmit').addEventListener('click', submit);
   }
@@ -4445,7 +4480,7 @@ function handleDeepLink(){
    要撤掉的话整段删除即可。 */
 (function(){
   const LAYER_IDS = ['detailOverlay','fontDetailOverlay','fontEditorOverlay','aiOverlay','settingsOverlay',
-                     'userProfileOverlay',
+                     'userProfileOverlay','postDetailOverlay','postEditorOverlay','afTryOverlay',
                      'dlSheetMask','pubSheetMask','confirmSheetMask','shareSheetMask','reportSheetMask',
                      'profileSheetMask','avatarCropMask','peekMask','fontLightboxMask',
                      'notifSheetMask'];
