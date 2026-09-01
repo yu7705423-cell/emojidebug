@@ -217,16 +217,20 @@
   .ring-bar i{display:block; height:100%; width:0; background:var(--ink);}
   /* 头像框合成器 */
  .af-stage{position:relative; width:100%; max-width:300px; margin:0 auto; aspect-ratio:1/1; background:var(--bg-elev); border:1px solid var(--border-soft); overflow:hidden; touch-action:none; cursor:grab;}
-.af-stage canvas{position:absolute; inset:0; width:100%; height:100%; display:block;}
-/* 显示用的两层图，盖在画布上面。画布只留着导出用 —— GIF 画进画布只会定格在
-   第一帧，<img> 才会正常动。头像现在固定铺满、只按形状裁一刀；缩放和拖动
-   都挪给了头像框那一层——头像框天生可能比头像大出一截，让它自己去对准
-   固定不动的头像，比反过来逼用户硬凑头像位置直观得多。 */
+/* 画布只负责导出，不给人看：GIF 画进画布只会定格在第一帧，底下压着一张
+   静止的旧帧、上面盖着会动的 <img>，透明区就会透出重影。显示一律走下面
+   两层 <img>，两边用同一套几何算，画面和导出不会对不上。 */
+.af-stage canvas{position:absolute; inset:0; width:100%; height:100%; display:block; opacity:0;}
+/* 头像不再铺满整块画布，而是自己占中间一小块（默认 72%），四周留出来的
+   地方就是头像框往外长的余量 —— 之前头像铺满，"框比头像大"只能等于
+   "框超出画布"，一超出就被裁掉了；圆形也因为裁在画布边上，看着像是把
+   最外面那个方框整个抠成了圆。两层各自能缩放能拖动，互不影响。 */
 .af-layer{position:absolute; display:block; pointer-events:none; max-width:none;}
 .af-layer[hidden]{display:none;}
-.af-av-clip{position:absolute; inset:0; overflow:hidden;}
+.af-av-clip{position:absolute; overflow:hidden;}
 .af-av-clip.circle{border-radius:50%;}
-.af-av-img{position:absolute; display:block; pointer-events:none; max-width:none;}
+/* 头像框是正方形的，图按 cover 填进去，裁切交给上面那层 overflow */
+.af-av-img{position:absolute; inset:0; width:100%; height:100%; object-fit:cover; display:block; pointer-events:none; max-width:none;}
 .af-ctl .af-reset{flex-shrink:0;}
 
   .af-hint{font-size:11px; color:var(--text-faint); text-align:center; margin-top:8px; line-height:1.6;}
@@ -3808,14 +3812,14 @@ function avatarFrameUiHtml(p){
         <div class="af-av-clip" id="${p}AvClip"><img class="af-av-img" id="${p}AvLayer" alt="" hidden></div>
         <img class="af-layer af-frame-layer" id="${p}FrLayer" alt="" hidden>
       </div>
-      <p class="af-hint">在图上拖动，调的是下面选中的那一层；滑块只缩放头像框。<br>圆形 / 方形指的是<b>你的头像</b>会被裁成什么形状，头像框图片本身不会被裁。</p>
+      <p class="af-hint">先选下面要调哪一层，再在图上拖动、用滑块缩放，两层各调各的。<br>圆形 / 方形只裁<b>你的头像</b>那一块，头像框整张显示、可以随便超出头像。</p>
       <p class="af-hint" id="${p}GifNote" hidden>这是动图：预览里会动，但保存下来的合成图是静态的（只有第一帧）。</p>
       <div class="type-toggle" id="${p}Target" style="margin-top:12px;">
         <button type="button" data-af="frame" class="active">拖动头像框</button>
         <button type="button" data-af="avatar">拖动头像</button>
       </div>
       <div class="af-ctl">
-        <label>缩放头像框</label>
+        <label id="${p}ZoomLabel">缩放头像框</label>
         <input type="range" id="${p}Zoom" min="40" max="400" value="100">
         <button type="button" class="chip af-reset" id="${p}ResetBtn">重置</button>
       </div>
@@ -3838,22 +3842,33 @@ function setupAvatarFrame(url, title, p){
   const S = cv.width;
   const st = {
     avatar:null, frame:null, avatarSrc:'', circle:false,
-    target:'frame',           // 拖动作用在哪一层
-    ax:0, ay:0,               // 头像的偏移（只能挪，不能缩放）
-    scale:1, x:0, y:0,        // 头像框的缩放和偏移
+    target:'frame',                 // 拖动和滑块作用在哪一层
+    avScale:1, ax:0, ay:0,          // 头像的缩放和偏移
+    scale:1, x:0, y:0,              // 头像框的缩放和偏移
   };
-  // 头像挪太多会把边缘拖进画面，留一点余量就够对准框上的洞了
-  const AV_PAN_LIMIT = S * 0.3;
-  const clampPan = v => Math.max(-AV_PAN_LIMIT, Math.min(AV_PAN_LIMIT, v));
+  // 头像默认只占画布的这么大，剩下的一圈留给头像框往外长。
+  // 铺满整块画布的话，框想比头像大就只能超出画布，一超出就被裁掉。
+  const AV_BASE = 0.72;
+  // 两层都不许拖到完全看不见：中心点必须还在画布里
+  const clampPan = v => Math.max(-S/2, Math.min(S/2, v));
+  const ZOOM = { frame:{ min:40, max:400, label:'缩放头像框' },
+                 avatar:{ min:30, max:140, label:'缩放头像' } };
 
-  // 头像框画多大、画在哪。以"完整显示、长边贴齐画布"为基准（不裁边），
-  // 缩放滑块和拖动都在这个基准上叠加——头像框天生可能比头像大出一截，
-  // 允许明显超过画布，也允许缩得比画布小。
-  function avatarGeom(img){
-    const base = Math.max(S/img.naturalWidth, S/img.naturalHeight);
-    const w = img.naturalWidth*base, h = img.naturalHeight*base;
-    return { w, h, x:(S-w)/2 + st.ax, y:(S-h)/2 + st.ay };
+  // 头像占的那块正方形：形状裁切（圆/方）就裁在它的边上，
+  // 所以它必须比画布小，否则圆形看起来就是把整块画布抠成了圆。
+  function avatarBox(){
+    const size = S * AV_BASE * st.avScale;
+    return { size, x:(S-size)/2 + st.ax, y:(S-size)/2 + st.ay };
   }
+  // 图按 cover 填满那块正方形，多出来的部分由裁切吃掉，不会留白边
+  function coverRect(img, box){
+    const k = Math.max(box.size/img.naturalWidth, box.size/img.naturalHeight);
+    const w = img.naturalWidth*k, h = img.naturalHeight*k;
+    return { w, h, x: box.x + (box.size-w)/2, y: box.y + (box.size-h)/2 };
+  }
+  // 头像框以"整张放进画布"为基准（不裁边），滑块和拖动在这上面叠加。
+  // 放大到超出画布是允许的 —— 超出的部分导出时确实会没有，
+  // 但头像本身只占中间 72%，正常尺寸的框都还在画布里。
   function frameGeom(img){
     const base = Math.min(S/img.naturalWidth, S/img.naturalHeight);
     const w = img.naturalWidth * base * st.scale, h = img.naturalHeight * base * st.scale;
@@ -3866,15 +3881,18 @@ function setupAvatarFrame(url, title, p){
     ctx.clearRect(0,0,S,S);
     const pc = v => (v*100/S)+'%';
     if(st.avatar){
-      // 头像按短边铺满画布（不留白边），大小固定不可缩放；能调的只有
-      // 上下左右挪一挪，和下面的圆形/方形开关
-      const g = avatarGeom(st.avatar);
+      const box = avatarBox(), g = coverRect(st.avatar, box);
       ctx.save();
-      if(st.circle){ ctx.beginPath(); ctx.arc(S/2, S/2, S/2, 0, Math.PI*2); ctx.clip(); }
+      ctx.beginPath();
+      // 裁在头像自己那块方框上，不是画布边上
+      if(st.circle) ctx.arc(box.x+box.size/2, box.y+box.size/2, box.size/2, 0, Math.PI*2);
+      else ctx.rect(box.x, box.y, box.size, box.size);
+      ctx.clip();
       ctx.drawImage(st.avatar, g.x, g.y, g.w, g.h);
       ctx.restore();
-      avLayer.style.width = pc(g.w); avLayer.style.height = pc(g.h);
-      avLayer.style.left  = pc(g.x); avLayer.style.top    = pc(g.y);
+      // 预览这边只摆那块方框，图靠 object-fit:cover 自己填满，跟上面一致
+      clip.style.width = pc(box.size); clip.style.height = pc(box.size);
+      clip.style.left  = pc(box.x);    clip.style.top     = pc(box.y);
     }
     if(st.frame){
       const g = frameGeom(st.frame);
@@ -3915,7 +3933,7 @@ function setupAvatarFrame(url, title, p){
     const k = S / stage.getBoundingClientRect().width;
     const dx = (e.clientX - lastX) * k, dy = (e.clientY - lastY) * k;
     if(st.target === 'avatar'){ st.ax = clampPan(st.ax + dx); st.ay = clampPan(st.ay + dy); }
-    else { st.x += dx; st.y += dy; }
+    else { st.x = clampPan(st.x + dx); st.y = clampPan(st.y + dy); }
     lastX = e.clientX; lastY = e.clientY;
     draw();
   });
@@ -3923,17 +3941,29 @@ function setupAvatarFrame(url, title, p){
   stage.addEventListener('pointerup', endDrag);
   stage.addEventListener('pointercancel', endDrag);
 
+  // 滑块是共用的：切到哪一层，它就调哪一层，量程和标题跟着换
+  function syncZoom(){
+    const z = $(p+'Zoom'), cfg = ZOOM[st.target];
+    z.min = cfg.min; z.max = cfg.max;
+    z.value = Math.round((st.target === 'avatar' ? st.avScale : st.scale) * 100);
+    $(p+'ZoomLabel').textContent = cfg.label;
+  }
   $(p+'Target').querySelectorAll('button[data-af]').forEach(b=>{
     b.addEventListener('click', ()=>{
       st.target = b.dataset.af;
       $(p+'Target').querySelectorAll('button[data-af]').forEach(x=>x.classList.toggle('active', x===b));
+      syncZoom();
     });
   });
   $(p+'ResetBtn').addEventListener('click', ()=>{
-    st.ax = 0; st.ay = 0; st.x = 0; st.y = 0; st.scale = 1;
-    $(p+'Zoom').value = 100; draw();
+    st.ax = 0; st.ay = 0; st.avScale = 1; st.x = 0; st.y = 0; st.scale = 1;
+    syncZoom(); draw();
   });
-  $(p+'Zoom').addEventListener('input', e=>{ st.scale = e.target.value/100; draw(); });
+  $(p+'Zoom').addEventListener('input', e=>{
+    const v = e.target.value/100;
+    if(st.target === 'avatar') st.avScale = v; else st.scale = v;
+    draw();
+  });
   $(p+'ShapeBtn').addEventListener('click', ()=>{
     st.circle = !st.circle;
     // 只裁头像那一层。头像框图片永远整张显示，不受这个开关影响
@@ -3952,7 +3982,8 @@ function setupAvatarFrame(url, title, p){
     if(st.avatar){ avLayer.src = st.avatar.src; avLayer.hidden = false; }
     // 换头像不影响头像框已经调好的缩放/位置，这两个现在是独立的两件事；
     // 但头像自己的偏移要归零，新图的构图跟旧图没关系
-    st.ax = 0; st.ay = 0;
+    st.ax = 0; st.ay = 0; st.avScale = 1;
+    if(st.target === 'avatar') syncZoom();
     refreshGifNote();
     draw();
     e.target.value = '';
