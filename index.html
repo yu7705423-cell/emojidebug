@@ -222,9 +222,10 @@
      第一帧，<img> 才会正常动。圆形只裁头像那一层，头像框图片永远整张显示。 */
   .af-layer{position:absolute; display:block; pointer-events:none; max-width:none;}
   .af-layer[hidden]{display:none;}
-  .af-av-clip{position:absolute; inset:0; overflow:hidden;}
+  .af-av-clip{position:absolute; left:0; top:0; overflow:hidden;}
   .af-av-clip.circle{border-radius:50%;}
-  .af-frame-layer{inset:0; width:100%; height:100%;}
+  .af-frame-layer{left:0; top:0;}
+  .af-ctl .af-reset{flex-shrink:0;}
   .af-hint{font-size:11px; color:var(--text-faint); text-align:center; margin-top:8px; line-height:1.6;}
   .af-ctl{display:flex; align-items:center; gap:10px; margin-top:12px;}
   .af-ctl label{font-size:11.5px; color:var(--text-dim); flex-shrink:0;}
@@ -3797,6 +3798,10 @@ function setupRingtone(){
 // 全程在本地 canvas 上完成，不上传任何东西。
 // 试戴那一坨（画布 + 缩放 + 形状 + 换头像 + 保存）详情页和发布页都要用，
 // 所以模板和逻辑都按 id 前缀参数化，两边共用一份，不复制第二遍。
+// 头像固定在中间一块方形区域里，头像框叠在上面、可以随便缩放和挪动 ——
+// 有些框的花纹要伸到头像外面很远，所以画布留了一圈余量给它伸出去。
+const AF_AVATAR_BOX = 0.72;   // 头像占画布的比例，剩下的都是头像框的活动空间
+
 function avatarFrameUiHtml(p){
   return `
       <div class="af-stage" id="${p}Stage">
@@ -3804,9 +3809,17 @@ function avatarFrameUiHtml(p){
         <div class="af-av-clip" id="${p}AvClip"><img class="af-layer af-av-layer" id="${p}AvLayer" alt="" hidden></div>
         <img class="af-layer af-frame-layer" id="${p}FrLayer" alt="" hidden>
       </div>
-      <p class="af-hint">拖动头像可以移动位置，用下面的滑块缩放，把头像对准框。<br>圆形 / 方形指的是<b>你的头像</b>会被裁成什么形状，头像框图片本身不会被裁。</p>
+      <p class="af-hint">在图上拖动，调整下面选中的那一层。圆形 / 方形指的是<b>你的头像</b>会被裁成什么形状，头像框图片本身不会被裁。</p>
       <p class="af-hint" id="${p}GifNote" hidden>这是动图：预览里会动，但保存下来的合成图是静态的（只有第一帧）。</p>
-      <div class="af-ctl"><label>缩放</label><input type="range" id="${p}Zoom" min="50" max="300" value="100"></div>
+      <div class="type-toggle af-target" id="${p}Target" style="margin-top:12px;">
+        <button type="button" data-af="frame" class="active">拖动头像框</button>
+        <button type="button" data-af="avatar">拖动头像</button>
+      </div>
+      <div class="af-ctl">
+        <label>头像框大小</label>
+        <input type="range" id="${p}Zoom" min="30" max="300" value="100">
+        <button type="button" class="chip af-reset" id="${p}ResetBtn">重置</button>
+      </div>
       <div class="btn-row">
         <button class="btn-outline" id="${p}ShapeBtn">头像裁成圆形</button>
         <button class="btn-outline" id="${p}PickBtn">换我的头像</button>
@@ -3823,32 +3836,59 @@ function setupAvatarFrame(url, title, p){
   const cv = $(p+'Canvas'), ctx = cv.getContext('2d'), stage = $(p+'Stage');
   const clip = $(p+'AvClip'), avLayer = $(p+'AvLayer'), frLayer = $(p+'FrLayer'), gifNote = $(p+'GifNote');
   const S = cv.width;
-  const st = { avatar:null, frame:null, avatarSrc:'', scale:1, x:0, y:0, circle:false };
+  const st = {
+    avatar:null, frame:null, avatarSrc:'', circle:false,
+    target:'frame',                 // 拖动作用在哪一层
+    av:{ x:0, y:0 },                // 头像那块方形区域的偏移
+    fr:{ x:0, y:0, scale:1 },       // 头像框的偏移和缩放
+  };
 
-  // 头像画多大、画在哪。画布和预览图层共用这一份计算，两边不会对不上。
-  function geom(img){
-    // 先按“铺满”算基准倍率，再乘用户的缩放，这样任何比例的图都不会留白边
-    const base = Math.max(S/img.naturalWidth, S/img.naturalHeight);
-    const w = img.naturalWidth * base * st.scale, h = img.naturalHeight * base * st.scale;
-    return { w, h, x:(S-w)/2 + st.x, y:(S-h)/2 + st.y };
+  // 头像：固定大小的一块方形区域，整块可以挪；里面的图按“铺满”缩放，不会留白边
+  function avatarGeom(){
+    const A = S * AF_AVATAR_BOX;
+    const bx = (S-A)/2 + st.av.x, by = (S-A)/2 + st.av.y;
+    const img = st.avatar;
+    if(!img) return { A, bx, by, w:A, h:A, x:bx, y:by };
+    const base = Math.max(A/img.naturalWidth, A/img.naturalHeight);
+    const w = img.naturalWidth*base, h = img.naturalHeight*base;
+    return { A, bx, by, w, h, x: bx + (A-w)/2, y: by + (A-h)/2 };
+  }
+  // 头像框：按“装得下”缩放到画布大小算 100%，再乘用户的缩放。用 min 不是 max，
+  // 非方形的框才不会被拉变形。超出画布的部分自然被裁掉，这是允许的。
+  function frameGeom(){
+    const img = st.frame;
+    if(!img) return { w:S, h:S, x:st.fr.x, y:st.fr.y };
+    const base = Math.min(S/img.naturalWidth, S/img.naturalHeight);
+    const w = img.naturalWidth*base*st.fr.scale, h = img.naturalHeight*base*st.fr.scale;
+    return { w, h, x:(S-w)/2 + st.fr.x, y:(S-h)/2 + st.fr.y };
   }
 
+  const pc = v => (v*100/S)+'%';
+
   function draw(){
-    // 底色不填了：填了的话圆形模式下四角会被烤进导出的图里，
-    // 变成灰角而不是透明。预览时透出的是 .af-stage 自己的底色，看起来一样。
+    // 底色不填：填了的话圆形模式下四角会被烤进导出的图里，变成灰角而不是透明
     ctx.clearRect(0,0,S,S);
+    const a = avatarGeom();
     if(st.avatar){
-      const g = geom(st.avatar);
       ctx.save();
-      if(st.circle){ ctx.beginPath(); ctx.arc(S/2, S/2, S/2, 0, Math.PI*2); ctx.clip(); }
-      ctx.drawImage(st.avatar, g.x, g.y, g.w, g.h);
+      ctx.beginPath();
+      if(st.circle) ctx.arc(a.bx + a.A/2, a.by + a.A/2, a.A/2, 0, Math.PI*2);
+      else ctx.rect(a.bx, a.by, a.A, a.A);
+      ctx.clip();
+      ctx.drawImage(st.avatar, a.x, a.y, a.w, a.h);
       ctx.restore();
-      // 同一组数值换成百分比给预览图层用，画布尺寸怎么变都不用跟着改
-      const pc = v => (v*100/S)+'%';
-      avLayer.style.width = pc(g.w); avLayer.style.height = pc(g.h);
-      avLayer.style.left  = pc(g.x); avLayer.style.top    = pc(g.y);
+      // 预览图层用同一组数值。裁剪框按画布算百分比，里面的图按裁剪框自己算。
+      clip.style.left = pc(a.bx); clip.style.top = pc(a.by);
+      clip.style.width = pc(a.A); clip.style.height = pc(a.A);
+      avLayer.style.left = ((a.x-a.bx)*100/a.A)+'%'; avLayer.style.top = ((a.y-a.by)*100/a.A)+'%';
+      avLayer.style.width = (a.w*100/a.A)+'%';       avLayer.style.height = (a.h*100/a.A)+'%';
     }
-    if(st.frame) ctx.drawImage(st.frame, 0, 0, S, S);
+    const f = frameGeom();
+    if(st.frame){
+      ctx.drawImage(st.frame, f.x, f.y, f.w, f.h);
+      frLayer.style.left = pc(f.x); frLayer.style.top = pc(f.y);
+      frLayer.style.width = pc(f.w); frLayer.style.height = pc(f.h);
+    }
   }
 
   function refreshGifNote(){
@@ -3869,7 +3909,7 @@ function setupAvatarFrame(url, title, p){
     draw();
   })();
 
-  // 拖动移动头像
+  // 拖动：作用在当前选中的那一层
   let dragging = false, lastX = 0, lastY = 0;
   stage.addEventListener('pointerdown', e=>{
     dragging = true; lastX = e.clientX; lastY = e.clientY;
@@ -3879,8 +3919,9 @@ function setupAvatarFrame(url, title, p){
     if(!dragging) return;
     // 屏幕上挪 1px，画布上要挪 S/显示宽度 px，否则手感会飘
     const k = S / stage.getBoundingClientRect().width;
-    st.x += (e.clientX - lastX) * k;
-    st.y += (e.clientY - lastY) * k;
+    const dx = (e.clientX - lastX) * k, dy = (e.clientY - lastY) * k;
+    const t = st.target === 'avatar' ? st.av : st.fr;
+    t.x += dx; t.y += dy;
     lastX = e.clientX; lastY = e.clientY;
     draw();
   });
@@ -3888,7 +3929,18 @@ function setupAvatarFrame(url, title, p){
   stage.addEventListener('pointerup', endDrag);
   stage.addEventListener('pointercancel', endDrag);
 
-  $(p+'Zoom').addEventListener('input', e=>{ st.scale = e.target.value/100; draw(); });
+  $(p+'Target').querySelectorAll('button[data-af]').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      st.target = b.dataset.af;
+      $(p+'Target').querySelectorAll('button[data-af]').forEach(x=>x.classList.toggle('active', x===b));
+    });
+  });
+
+  $(p+'Zoom').addEventListener('input', e=>{ st.fr.scale = e.target.value/100; draw(); });
+  $(p+'ResetBtn').addEventListener('click', ()=>{
+    st.av = { x:0, y:0 }; st.fr = { x:0, y:0, scale:1 };
+    $(p+'Zoom').value = 100; draw();
+  });
   $(p+'ShapeBtn').addEventListener('click', ()=>{
     st.circle = !st.circle;
     // 只裁头像那一层。以前是给整个 stage 加圆角，把头像框图片也一起削圆了
@@ -3905,7 +3957,7 @@ function setupAvatarFrame(url, title, p){
     st.avatarSrc = dataUrl;
     st.avatar = await loadImageForCanvas(dataUrl);
     if(st.avatar){ avLayer.src = st.avatar.src; avLayer.hidden = false; }
-    st.x = 0; st.y = 0; st.scale = 1; $(p+'Zoom').value = 100;
+    st.av = { x:0, y:0 };
     refreshGifNote();
     draw();
     e.target.value = '';
@@ -3920,8 +3972,6 @@ function setupAvatarFrame(url, title, p){
   });
 }
 
-// 发布/编辑头像框时先自己试戴一下 —— 图床不给跨域、或者框的透明区位置不对，
-// 在这一步就能看出来，不用等发出去别人来说“套不上”
 function openAvatarFrameTry(url, title){
   $('afTryBody').innerHTML = avatarFrameUiHtml('aft') +
     '<p class="field-help">这是别人打开你这条内容时看到的效果，预览只在本地生成，不会上传。' +
