@@ -217,8 +217,14 @@
   .ring-bar i{display:block; height:100%; width:0; background:var(--ink);}
   /* 头像框合成器 */
   .af-stage{position:relative; width:100%; max-width:300px; margin:0 auto; aspect-ratio:1/1; background:var(--bg-elev); border:1px solid var(--border-soft); overflow:hidden; touch-action:none; cursor:grab;}
-  .af-stage.circle{border-radius:50%;}
   .af-stage canvas{position:absolute; inset:0; width:100%; height:100%; display:block;}
+  /* 显示用的两层图，盖在画布上面。画布只留着导出用 —— GIF 画进画布只会定格在
+     第一帧，<img> 才会正常动。圆形只裁头像那一层，头像框图片永远整张显示。 */
+  .af-layer{position:absolute; display:block; pointer-events:none; max-width:none;}
+  .af-layer[hidden]{display:none;}
+  .af-av-clip{position:absolute; inset:0; overflow:hidden;}
+  .af-av-clip.circle{border-radius:50%;}
+  .af-frame-layer{inset:0; width:100%; height:100%;}
   .af-hint{font-size:11px; color:var(--text-faint); text-align:center; margin-top:8px; line-height:1.6;}
   .af-ctl{display:flex; align-items:center; gap:10px; margin-top:12px;}
   .af-ctl label{font-size:11.5px; color:var(--text-dim); flex-shrink:0;}
@@ -3793,11 +3799,16 @@ function setupRingtone(){
 // 所以模板和逻辑都按 id 前缀参数化，两边共用一份，不复制第二遍。
 function avatarFrameUiHtml(p){
   return `
-      <div class="af-stage" id="${p}Stage"><canvas id="${p}Canvas" width="720" height="720"></canvas></div>
-      <p class="af-hint">拖动头像可以移动位置，用下面的滑块缩放，把头像对准框</p>
+      <div class="af-stage" id="${p}Stage">
+        <canvas id="${p}Canvas" width="720" height="720"></canvas>
+        <div class="af-av-clip" id="${p}AvClip"><img class="af-layer af-av-layer" id="${p}AvLayer" alt="" hidden></div>
+        <img class="af-layer af-frame-layer" id="${p}FrLayer" alt="" hidden>
+      </div>
+      <p class="af-hint">拖动头像可以移动位置，用下面的滑块缩放，把头像对准框。<br>圆形 / 方形指的是<b>你的头像</b>会被裁成什么形状，头像框图片本身不会被裁。</p>
+      <p class="af-hint" id="${p}GifNote" hidden>这是动图：预览里会动，但保存下来的合成图是静态的（只有第一帧）。</p>
       <div class="af-ctl"><label>缩放</label><input type="range" id="${p}Zoom" min="50" max="300" value="100"></div>
       <div class="btn-row">
-        <button class="btn-outline" id="${p}ShapeBtn">切换为圆形</button>
+        <button class="btn-outline" id="${p}ShapeBtn">头像裁成圆形</button>
         <button class="btn-outline" id="${p}PickBtn">换我的头像</button>
       </div>
       <input type="file" id="${p}FileInput" accept="image/*">
@@ -3806,31 +3817,55 @@ function avatarFrameUiHtml(p){
       </div>`;
 }
 
+const isGifUrl = u => /^data:image\/gif/i.test(u||'') || /\.gif($|[?#])/i.test(u||'');
+
 function setupAvatarFrame(url, title, p){
   const cv = $(p+'Canvas'), ctx = cv.getContext('2d'), stage = $(p+'Stage');
+  const clip = $(p+'AvClip'), avLayer = $(p+'AvLayer'), frLayer = $(p+'FrLayer'), gifNote = $(p+'GifNote');
   const S = cv.width;
-  const st = { avatar:null, frame:null, scale:1, x:0, y:0, circle:false };
+  const st = { avatar:null, frame:null, avatarSrc:'', scale:1, x:0, y:0, circle:false };
+
+  // 头像画多大、画在哪。画布和预览图层共用这一份计算，两边不会对不上。
+  function geom(img){
+    // 先按“铺满”算基准倍率，再乘用户的缩放，这样任何比例的图都不会留白边
+    const base = Math.max(S/img.naturalWidth, S/img.naturalHeight);
+    const w = img.naturalWidth * base * st.scale, h = img.naturalHeight * base * st.scale;
+    return { w, h, x:(S-w)/2 + st.x, y:(S-h)/2 + st.y };
+  }
 
   function draw(){
+    // 底色不填了：填了的话圆形模式下四角会被烤进导出的图里，
+    // 变成灰角而不是透明。预览时透出的是 .af-stage 自己的底色，看起来一样。
     ctx.clearRect(0,0,S,S);
-    ctx.fillStyle = '#F2F2F2'; ctx.fillRect(0,0,S,S);
     if(st.avatar){
+      const g = geom(st.avatar);
       ctx.save();
       if(st.circle){ ctx.beginPath(); ctx.arc(S/2, S/2, S/2, 0, Math.PI*2); ctx.clip(); }
-      const img = st.avatar;
-      // 先按“铺满”算基准倍率，再乘用户的缩放，这样任何比例的图都不会留白边
-      const base = Math.max(S/img.naturalWidth, S/img.naturalHeight);
-      const w = img.naturalWidth * base * st.scale, hgt = img.naturalHeight * base * st.scale;
-      ctx.drawImage(img, (S-w)/2 + st.x, (S-hgt)/2 + st.y, w, hgt);
+      ctx.drawImage(st.avatar, g.x, g.y, g.w, g.h);
       ctx.restore();
+      // 同一组数值换成百分比给预览图层用，画布尺寸怎么变都不用跟着改
+      const pc = v => (v*100/S)+'%';
+      avLayer.style.width = pc(g.w); avLayer.style.height = pc(g.h);
+      avLayer.style.left  = pc(g.x); avLayer.style.top    = pc(g.y);
     }
     if(st.frame) ctx.drawImage(st.frame, 0, 0, S, S);
   }
 
+  function refreshGifNote(){
+    gifNote.hidden = !(isGifUrl(url) || isGifUrl(st.avatarSrc));
+  }
+
   (async ()=>{
     st.frame  = await loadImageForCanvas(url);
-    st.avatar = await loadImageForCanvas(getMyHdAvatar() || avatarDataUrl || DEFAULT_AVATAR_BASE);
-    if(!st.frame) showToast('头像框图片取不回来，可能是图床不允许跨域');
+    st.avatarSrc = getMyHdAvatar() || avatarDataUrl || DEFAULT_AVATAR_BASE;
+    st.avatar = await loadImageForCanvas(st.avatarSrc);
+    // 显示不需要跨域，只有导出需要。所以取不回来时预览退回原始地址，
+    // 至少还能看效果 —— 而不是整块空白，让人以为是链接填错了。
+    frLayer.src = st.frame ? st.frame.src : url;
+    frLayer.hidden = false;
+    if(st.avatar){ avLayer.src = st.avatar.src; avLayer.hidden = false; }
+    if(!st.frame) showToast('这个图床不允许跨域：能预览，但存不下合成图');
+    refreshGifNote();
     draw();
   })();
 
@@ -3856,8 +3891,9 @@ function setupAvatarFrame(url, title, p){
   $(p+'Zoom').addEventListener('input', e=>{ st.scale = e.target.value/100; draw(); });
   $(p+'ShapeBtn').addEventListener('click', ()=>{
     st.circle = !st.circle;
-    stage.classList.toggle('circle', st.circle);
-    $(p+'ShapeBtn').textContent = st.circle ? '切换为方形' : '切换为圆形';
+    // 只裁头像那一层。以前是给整个 stage 加圆角，把头像框图片也一起削圆了
+    clip.classList.toggle('circle', st.circle);
+    $(p+'ShapeBtn').textContent = st.circle ? '头像裁成方形' : '头像裁成圆形';
     draw();
   });
   $(p+'PickBtn').addEventListener('click', ()=>$(p+'FileInput').click());
@@ -3866,8 +3902,11 @@ function setupAvatarFrame(url, title, p){
     if(!file) return;
     // 本地选的图直接读成 data URI —— 同源，不存在跨域问题，也不会上传
     const dataUrl = await new Promise(res=>{ const r = new FileReader(); r.onload = ()=>res(r.result); r.readAsDataURL(file); });
+    st.avatarSrc = dataUrl;
     st.avatar = await loadImageForCanvas(dataUrl);
+    if(st.avatar){ avLayer.src = st.avatar.src; avLayer.hidden = false; }
     st.x = 0; st.y = 0; st.scale = 1; $(p+'Zoom').value = 100;
+    refreshGifNote();
     draw();
     e.target.value = '';
   });
