@@ -3183,11 +3183,16 @@ function repoFolderTiles(){
   const tiles = [];
   const none = tabItems.filter(it=>!it.folder);
   if(none.length) tiles.push({ id:'none', name:'未分类', items: none });
+  // 空文件夹也列出来。藏起来的话，刚建完一个夹子它就凭空消失了，
+  // 只能靠"移动"才能想起它还在
   repoFolders.forEach(f=>{
-    const inF = tabItems.filter(it=>it.folder===f.id);
-    if(inF.length) tiles.push({ id:f.id, name:f.name, items: inF });
+    tiles.push({ id:f.id, name:f.name, items: tabItems.filter(it=>it.folder===f.id) });
   });
   return tiles;
+}
+// 以前填过的来源，去重给快选用
+function repoKnownOrigins(){
+  return Array.from(new Set(repoItems.map(x=>(x.origin||'').trim()).filter(Boolean))).slice(0,12);
 }
 function repoFolderCoverHtml(items){
   const cells = (items||[]).slice(0, 4);
@@ -3300,6 +3305,9 @@ function openRepoAddSheet(){
       </div>
       <div class="field-label">来源（可选）</div>
       <input class="field-input" id="raOrigin" maxlength="20" placeholder="比如朋友发的、某个群聊、某个 app，留空表示不填">
+      ${repoKnownOrigins().length ? `<div class="chip-row" id="raOriginChips" style="margin-top:8px;">${
+        repoKnownOrigins().map(o=>`<button class="chip" data-origin="${esc(o)}">${esc(o)}</button>`).join('')}</div>` : ''}
+      <p class="field-help">填了的话，一键上传时会一起带到发布页的「来源」里。</p>
       <div class="field-label" style="margin-top:14px;">粘贴链接</div>
       <div class="composer"><textarea class="field" id="raText" placeholder="每行一条，可以带描述：&#10;笑死：https://example.com/a.png&#10;https://example.com/b.png" style="min-height:120px;"></textarea></div>
       <p class="field-help">格式跟发布页的导入一样，「描述+分隔符+链接」或者只有链接都行。</p>
@@ -3311,6 +3319,10 @@ function openRepoAddSheet(){
     </div>`;
   $('raClose').addEventListener('click', ()=>$('repoSheetMask').classList.remove('open'));
   $('raText').addEventListener('input', e=>{ text = e.target.value; });
+  // 点一下就填进输入框，不重画整块面板 —— 重画会把上面正在打的链接冲掉
+  $('repoSheetBox').querySelectorAll('[data-origin]').forEach(b=>{
+    b.addEventListener('click', ()=>{ const el=$('raOrigin'); if(el) el.value = b.dataset.origin; });
+  });
   $('repoSheetBox').querySelectorAll('#raFolderChips [data-to]').forEach(b=>{
     b.addEventListener('click', ()=>{
       addFolder = b.dataset.to;
@@ -3372,6 +3384,8 @@ function openRepoItemSheet(it){
         <input class="field-input" id="riDesc" maxlength="20" value="${esc(desc)}" placeholder="给它写个描述">
         <div class="field-label">来源（可选）</div>
         <input class="field-input" id="riOrigin" maxlength="20" value="${esc(origin)}" placeholder="比如朋友发的、某个群聊、某个 app">
+        ${repoKnownOrigins().length ? `<div class="chip-row" style="margin-top:8px;">${
+          repoKnownOrigins().map(o=>`<button class="chip" data-origin="${esc(o)}">${esc(o)}</button>`).join('')}</div>` : ''}
         <div class="field-label">文件夹</div>
         <div class="chip-row">
           <button class="chip ${!it.folder?'active':''}" data-to="">未分类</button>
@@ -3391,6 +3405,9 @@ function openRepoItemSheet(it){
     $('riClose').addEventListener('click', ()=>$('repoSheetMask').classList.remove('open'));
     $('riDesc').addEventListener('input', e=>{ desc = e.target.value; });
     $('riOrigin').addEventListener('input', e=>{ origin = e.target.value; });
+    $('repoSheetBox').querySelectorAll('[data-origin]').forEach(b=>{
+      b.addEventListener('click', ()=>{ origin = b.dataset.origin; const el=$('riOrigin'); if(el) el.value = origin; });
+    });
     $('repoSheetBox').querySelectorAll('[data-to]').forEach(b=>{
       b.addEventListener('click', async ()=>{
         const dEl = $('riDesc'); if(dEl) desc = dEl.value;
@@ -3471,7 +3488,10 @@ function repoPublishPicked(){
     `将把 ${ok.length} 张放进发布页。${skipped.length?`已跳过：${skipped.join('、')}。`:''}\n请确认这些内容由你自行整理，不是直接搬运他人作品。`,
     '确认，去发布',
     ()=>{
-      pubItems = ok.map(it=>({ id:uid(), url:it.url, desc:it.desc||'', status:'idle', source:'' }));
+      // pubItems 每行本来就有「来源」这一栏，之前一直传空。
+      // 仓库里记过的话直接带过去，省得到发布页再补一遍
+      pubItems = ok.map(it=>({ id:uid(), url:it.url, desc:it.desc||'', status:'idle',
+        source: (it.origin||'').trim(), sourceOpen: !!(it.origin||'').trim() }));
       editingCollectionId = null;
       pubNeedsDesc = false; renderNeedsDescCheck();
       batchMode = false; batchSelected = new Set();
