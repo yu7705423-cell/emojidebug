@@ -235,6 +235,21 @@
 
   .af-hint{font-size:11px; color:var(--text-faint); text-align:center; margin-top:8px; line-height:1.6;}
 
+  /* 我的仓库 */
+  .repo-bar{display:flex; gap:8px; align-items:center; margin-top:12px; flex-wrap:wrap;}
+  .repo-grid{display:grid; grid-template-columns:repeat(3, 1fr); gap:6px; margin-top:12px;}
+  .repo-cell{position:relative; aspect-ratio:1/1; background:var(--bg-elev); border-radius:var(--radius-s); overflow:hidden; cursor:pointer;}
+  .repo-cell img{width:100%; height:100%; object-fit:cover; display:block;}
+  .repo-cell .cap{position:absolute; left:0; right:0; bottom:0; padding:3px 5px; font-size:10px; line-height:1.3; color:#fff; background:linear-gradient(transparent, rgba(0,0,0,.68)); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  /* 站内下载的角标。一眼能分出哪些是自己整理的、哪些是别人的作品 —— 
+     一键上传只认自己的那一批，这个角标就是那条线在界面上的样子 */
+  .repo-cell .src{position:absolute; top:4px; left:4px; font-size:9px; font-weight:700; padding:2px 4px; border-radius:3px; background:rgba(0,0,0,.55); color:#fff;}
+  .repo-cell .pick{position:absolute; top:4px; right:4px; width:18px; height:18px; border-radius:50%; border:1.5px solid #fff; box-shadow:0 0 0 1px rgba(0,0,0,.25); display:flex; align-items:center; justify-content:center;}
+  .repo-cell .pick.on{background:var(--ink); border-color:var(--ink);}
+  .repo-cell .pick svg{width:10px; height:10px;}
+  .repo-cell.disabled{opacity:.42;}
+  .repo-empty{text-align:center; color:var(--text-faint); font-size:12.5px; padding:40px 10px; line-height:1.8;}
+
   /* 待描述区 */
   .wanted-flag{display:inline-block; font-size:10px; font-weight:700; line-height:1; padding:3px 5px; margin-right:5px; border-radius:4px; background:var(--ink); color:var(--ink-contrast); vertical-align:1px;}
   /* 待描述包的表情格子可以点开写词，右上角标着已经有几个人写了 */
@@ -623,8 +638,10 @@
         <button class="ig-tab active" data-tab="works" aria-label="作品"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg></button>
         <button class="ig-tab" data-tab="likes" aria-label="点赞"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20s-7-4.4-9.5-9A5.5 5.5 0 0 1 12 5.5 5.5 5.5 0 0 1 21.5 11c-2.5 4.6-9.5 9-9.5 9z"/></svg></button>
         <button class="ig-tab" data-tab="favorites" aria-label="收藏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg></button>
+        <button class="ig-tab" data-tab="repo" aria-label="我的仓库"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18v13H3z"/><path d="M3 7l2-3h14l2 3"/><path d="M10 11h4"/></svg></button>
       </div>
       <div class="ig-grid-wrap" id="myGrid"></div>
+      <div id="myRepoPane" style="display:none;"></div>
     </div>
   </div>
 
@@ -861,6 +878,10 @@
   </div>
 
   <!-- download sheet -->
+  <div class="sheet-mask" id="repoSheetMask">
+    <div class="sheet-box" id="repoSheetBox"></div>
+  </div>
+
   <div class="sheet-mask" id="descSheetMask">
     <div class="sheet-box" id="descSheetBox"></div>
   </div>
@@ -1320,7 +1341,7 @@ async function loadMyLikesFavorites(){
   else favorited = new Set((favRows||[]).flatMap(r=>[r.collection_id, r.font_id, r.post_id].filter(Boolean)));
 }
 async function loadAppData(){
-  await Promise.all([loadCollections(), loadMyLikesFavorites(), loadFonts(), loadPosts(), loadNotifications(), loadEmojiDescs()]);
+  await Promise.all([loadCollections(), loadMyLikesFavorites(), loadFonts(), loadPosts(), loadNotifications(), loadEmojiDescs(), loadRepo()]);
   renderProfileBits();
   renderAll();
   startAutoRefresh();
@@ -1347,7 +1368,7 @@ async function silentRefresh(force){
   const scroller = document.querySelector('.page-scroll');
   const scrollPos = scroller ? scroller.scrollTop : 0;
   try{
-    await Promise.all([loadCollections(), loadMyLikesFavorites(), loadFonts(), loadPosts(), loadNotifications(), loadEmojiDescs()]);
+    await Promise.all([loadCollections(), loadMyLikesFavorites(), loadFonts(), loadPosts(), loadNotifications(), loadEmojiDescs(), loadRepo()]);
     renderProfileBits();
     renderAll();
     if(scroller) scroller.scrollTop = scrollPos;
@@ -2337,7 +2358,10 @@ function downloadBlob(blob, filename){
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a'); a.href=url; a.download=filename;
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  // 点完立刻 revoke 是有竞态的：浏览器还没开始读这个 blob，地址就被回收了。
+  // 小文件通常侥幸能过，仓库备份那种几十兆的 zip 就容易存不下来。
+  // 晚一点再回收，反正刷新页面本来就会全部释放。
+  setTimeout(()=>URL.revokeObjectURL(url), 60000);
 }
 
 /* ===================== thumb / cover helpers ===================== */
@@ -2725,6 +2749,724 @@ function renderFavorites(){
   renderItemsGrid($('favGrid'), items, '还没有收藏任何内容', {label:'去首页看看', onClick:()=>showPage('home')});
 }
 
+
+/* ===================== 我的表情包仓库：本地存储层 ===================== */
+// 全部存在浏览器里，不上传、不同步、别人看不到。
+//
+// 为什么用 IndexedDB 而不是 localStorage：localStorage 整个站点一共只有 5MB，
+// 而且只能存字符串——图片要先 base64，体积再涨 1/3，存不到十几张就抛异常。
+// IndexedDB 能直接存 Blob 二进制，配额是磁盘剩余空间的一大块。
+//
+// 三个 store 分开的原因：列表渲染只需要 items（几十字节一条），
+// 图片本体放在 blobs 里。IndexedDB 读一条就是读整条记录，
+// 图文混在一起的话，光是打开仓库页就要把几十兆图片全反序列化一遍。
+const REPO_DB = 'yoww_repo';
+const REPO_VER = 1;
+let repoDb = null;
+
+function openRepoDb(){
+  if(repoDb) return Promise.resolve(repoDb);
+  return new Promise((resolve, reject)=>{
+    let req;
+    try{ req = indexedDB.open(REPO_DB, REPO_VER); }
+    catch(e){ reject(e); return; }
+    req.onupgradeneeded = ()=>{
+      const db = req.result;
+      if(!db.objectStoreNames.contains('items')){
+        const s = db.createObjectStore('items', { keyPath:'id' });
+        s.createIndex('folder', 'folder');
+        s.createIndex('source', 'source');
+      }
+      if(!db.objectStoreNames.contains('folders')) db.createObjectStore('folders', { keyPath:'id' });
+      if(!db.objectStoreNames.contains('blobs'))   db.createObjectStore('blobs',   { keyPath:'id' });
+    };
+    req.onsuccess = ()=>{ repoDb = req.result; resolve(repoDb); };
+    req.onerror   = ()=>reject(req.error || new Error('打不开本地仓库'));
+  });
+}
+// 一次事务包一个 Promise。注意要等 transaction 的 complete 而不是
+// request 的 success —— 后者只说明这条请求发出去了，事务还可能整个回滚。
+function repoTx(stores, mode, fn){
+  return openRepoDb().then(db=>new Promise((resolve, reject)=>{
+    const tx = db.transaction(stores, mode);
+    let out;
+    tx.oncomplete = ()=>resolve(out);
+    tx.onerror    = ()=>reject(tx.error);
+    tx.onabort    = ()=>reject(tx.error || new Error('本地仓库写入被中断'));
+    try{ out = fn(tx); }catch(e){ try{ tx.abort(); }catch(_){} reject(e); }
+  }));
+}
+function reqAll(store){
+  return new Promise((resolve, reject)=>{
+    const r = store.getAll();
+    r.onsuccess = ()=>resolve(r.result || []);
+    r.onerror   = ()=>reject(r.error);
+  });
+}
+
+let repoItems = [];      // 仓库条目（不含图片本体）
+let repoFolders = [];    // 文件夹
+let repoReady = false;   // 打不开时（无痕模式等）整块降级，不让主流程崩
+let repoBlobUrls = new Map();   // id -> objectURL，渲染时按需建，切页时回收
+
+async function loadRepo(){
+  try{
+    const db = await openRepoDb();
+    const tx = db.transaction(['items','folders'], 'readonly');
+    const [items, folders] = await Promise.all([
+      reqAll(tx.objectStore('items')), reqAll(tx.objectStore('folders')),
+    ]);
+    repoItems = items.sort((a,b)=>b.addedAt-a.addedAt);
+    repoFolders = folders.sort((a,b)=>a.createdAt-b.createdAt);
+    repoReady = true;
+  }catch(e){
+    // 无痕模式、禁用存储的 WebView 里 indexedDB 直接不可用。
+    // 这时候仓库整块不可用，但其它功能一切照旧。
+    console.warn('本地仓库打不开（浏览器不允许存储？）：', e && e.message);
+    repoReady = false;
+  }
+}
+
+// 图片本体要不要一起缓存。默认关：多数人只想看看自己下过什么，
+// 不需要为此占几十兆；想要离线/防图床挂掉的人自己去设置里打开。
+function repoCacheImages(){
+  try{ return localStorage.getItem('zhp_repo_cache_img') === '1'; }catch(e){ return false; }
+}
+function setRepoCacheImages(on){
+  try{ localStorage.setItem('zhp_repo_cache_img', on ? '1' : '0'); }catch(e){}
+}
+
+async function repoGetBlob(id){
+  try{
+    const db = await openRepoDb();
+    return await new Promise((resolve, reject)=>{
+      const r = db.transaction('blobs','readonly').objectStore('blobs').get(id);
+      r.onsuccess = ()=>resolve(r.result ? r.result.blob : null);
+      r.onerror   = ()=>reject(r.error);
+    });
+  }catch(e){ return null; }
+}
+// 缓存图片时走图片代理那一套：图床不给跨域的话 fetch 直接失败，
+// 跟分享卡片遇到的是同一个问题，复用同一个解法。
+async function fetchImageBlob(url){
+  if(!url) return null;
+  try{
+    const good = await exportableUrl(url);
+    if(!good) return null;
+    const res = await fetch(good);
+    if(!res.ok) return null;
+    const blob = await res.blob();
+    if(!blob.type.startsWith('image/')) return null;
+    if(blob.size > 8*1024*1024) return null;   // 单张 8MB 封顶，跟图片代理一致
+    return blob;
+  }catch(e){ return null; }
+}
+
+// 往仓库里加。同一个来源的同一张图不重复加（按 来源+链接 判重），
+// 否则每下载一次同一个包就多一份。
+async function repoAdd(rows){
+  if(!repoReady) { showToast('这个浏览器不允许本地存储，仓库用不了'); return []; }
+  const seen = new Set(repoItems.map(it=>it.source+'|'+(it.url||'')));
+  const fresh = [];
+  for(const r of rows){
+    const key = r.source+'|'+(r.url||'');
+    if(r.url && seen.has(key)) continue;
+    if(r.url) seen.add(key);
+    fresh.push(Object.assign({
+      id: uid()+Date.now().toString(36), source:'mine', url:'', desc:'', folder:'',
+      hasBlob:false, addedAt: Date.now(), fromTitle:'', fromAuthor:'',
+    }, r));
+  }
+  if(!fresh.length) return [];
+  await repoTx(['items'], 'readwrite', tx=>{
+    const s = tx.objectStore('items');
+    fresh.forEach(it=>s.put(it));
+  });
+  repoItems = fresh.concat(repoItems);
+  // 返回真正加进去的那几条，而不是个数 —— 调用方常常还要接着给它们塞图片，
+  // 靠 repoItems[0] 去猜"刚加的是哪条"迟早会猜错
+  return fresh;
+}
+async function repoPutBlob(id, blob){
+  await repoTx(['blobs','items'], 'readwrite', tx=>{
+    tx.objectStore('blobs').put({ id, blob, type: blob.type });
+    const s = tx.objectStore('items');
+    const r = s.get(id);
+    r.onsuccess = ()=>{ const it = r.result; if(it){ it.hasBlob = true; s.put(it); } };
+  });
+  const local = repoItems.find(x=>x.id===id);
+  if(local) local.hasBlob = true;
+}
+async function repoUpdate(id, patch){
+  await repoTx(['items'], 'readwrite', tx=>{
+    const s = tx.objectStore('items');
+    const r = s.get(id);
+    r.onsuccess = ()=>{ const it = r.result; if(it) s.put(Object.assign(it, patch)); };
+  });
+  const local = repoItems.find(x=>x.id===id);
+  if(local) Object.assign(local, patch);
+}
+async function repoRemove(ids){
+  await repoTx(['items','blobs'], 'readwrite', tx=>{
+    ids.forEach(id=>{ tx.objectStore('items').delete(id); tx.objectStore('blobs').delete(id); });
+  });
+  const gone = new Set(ids);
+  repoItems = repoItems.filter(it=>!gone.has(it.id));
+  gone.forEach(id=>{
+    const u = repoBlobUrls.get(id);
+    if(u){ URL.revokeObjectURL(u); repoBlobUrls.delete(id); }
+  });
+}
+async function repoAddFolder(name){
+  const f = { id: uid()+Date.now().toString(36), name: String(name||'').trim().slice(0,20), createdAt: Date.now() };
+  if(!f.name) return null;
+  await repoTx(['folders'], 'readwrite', tx=>tx.objectStore('folders').put(f));
+  repoFolders.push(f);
+  return f;
+}
+// 删文件夹不删里面的图，只是把它们退回"未分类"——
+// 手滑删掉一个夹子就连图一起没了，那太吓人了
+async function repoRemoveFolder(fid){
+  const inside = repoItems.filter(it=>it.folder===fid).map(it=>it.id);
+  await repoTx(['folders','items'], 'readwrite', tx=>{
+    tx.objectStore('folders').delete(fid);
+    const s = tx.objectStore('items');
+    inside.forEach(id=>{
+      const r = s.get(id);
+      r.onsuccess = ()=>{ const it = r.result; if(it){ it.folder=''; s.put(it); } };
+    });
+  });
+  repoFolders = repoFolders.filter(f=>f.id!==fid);
+  repoItems.forEach(it=>{ if(it.folder===fid) it.folder=''; });
+}
+
+
+/* ===================== 我的仓库：界面 ===================== */
+let repoFolderFilter = 'all';   // 'all' | 'none' | folderId
+let repoSourceFilter = 'all';   // 'all' | 'site' | 'mine'
+let repoPickMode = false;
+let repoPicked = new Set();
+
+// 站内下载自动入库。触发点是"真的导出了"（复制 / txt / docx 任一），
+// 不是"打开了下载弹层"——点开看看又关掉不该算下载。
+// 存的是这次勾选的那些图，带上当时选定的描述和来自哪个作品。
+async function saveDownloadToRepo(c, chosen, descOf){
+  if(!repoReady) return;
+  const rows = chosen.map(e=>({
+    source:'site', url:e.url, desc: descOf(e) || '',
+    fromTitle: c.title || '', fromAuthor: c.author || '',
+  }));
+  const fresh = await repoAdd(rows);
+  if(!fresh.length) return;
+  if(repoCacheImages()) cacheRepoImages(fresh.map(r=>r.url));
+  showToast(`已存进仓库（${fresh.length} 张）`);
+  if(currentPageId === 'my') renderMy();
+}
+// 图片本体后台慢慢抓，不挡着用户。抓不到就算了——条目还在，链接还在，
+// 只是没有离线副本，不该因此报错打扰人。
+async function cacheRepoImages(urls){
+  for(const url of urls){
+    const it = repoItems.find(x=>x.url===url && !x.hasBlob);
+    if(!it) continue;
+    const blob = await fetchImageBlob(url);
+    if(blob) { try{ await repoPutBlob(it.id, blob); }catch(e){ break; } }   // 配额满了就别再试了
+  }
+  if(currentPageId === 'my' && myTab === 'repo') renderRepo();
+}
+
+function repoVisibleItems(){
+  return repoItems.filter(it=>{
+    if(repoSourceFilter !== 'all' && it.source !== repoSourceFilter) return false;
+    if(repoFolderFilter === 'none') return !it.folder;
+    if(repoFolderFilter !== 'all'  && it.folder !== repoFolderFilter) return false;
+    return true;
+  });
+}
+// 能不能一键上传：站内下载的不行（那是别人的作品），
+// 只有本地图片没有链接的也不行（发布出去别人取不到图）
+function repoCanPublish(it){ return it.source === 'mine' && !!(it.url||'').trim(); }
+
+function renderRepo(){
+  const pane = $('myRepoPane');
+  if(!repoReady){
+    pane.innerHTML = `<div class="repo-empty">这个浏览器不允许本地存储，仓库用不了。<br>无痕模式 / 禁用了网站数据的话，换个方式打开再试。</div>`;
+    return;
+  }
+  const items = repoVisibleItems();
+  const folderChips = [
+    { id:'all',  name:`全部 ${repoItems.length}` },
+    { id:'none', name:`未分类 ${repoItems.filter(x=>!x.folder).length}` },
+  ].concat(repoFolders.map(f=>({ id:f.id, name:`${f.name} ${repoItems.filter(x=>x.folder===f.id).length}` })));
+
+  pane.innerHTML = `
+    <div class="repo-bar">
+      <div class="type-toggle" style="flex:1;">
+        <button data-src="all"  class="${repoSourceFilter==='all'?'active':''}">全部</button>
+        <button data-src="mine" class="${repoSourceFilter==='mine'?'active':''}">自己整理</button>
+        <button data-src="site" class="${repoSourceFilter==='site'?'active':''}">站内下载</button>
+      </div>
+      <button class="icon-btn" id="repoSettingsBtn" aria-label="仓库设置"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+    </div>
+    <div class="chip-row" id="repoFolderRow" style="margin-top:10px;">
+      ${folderChips.map(f=>`<button class="chip ${repoFolderFilter===f.id?'active':''}" data-folder="${esc(f.id)}">${esc(f.name)}</button>`).join('')}
+      <button class="chip" id="repoNewFolderBtn">＋ 文件夹</button>
+    </div>
+    <div class="btn-row">
+      <button class="btn-outline" id="repoAddBtn">＋ 添加表情</button>
+      <button class="btn-outline" id="repoPickBtn">${repoPickMode?'退出选择':'批量选择'}</button>
+    </div>
+    ${repoPickMode ? `<div class="btn-row">
+      <button class="btn-outline" id="repoPickAllBtn">全选</button>
+      <button class="btn-outline" id="repoMoveBtn">移到文件夹</button>
+      <button class="btn-outline" id="repoExportBtn">导出格式</button>
+    </div>
+    <div class="btn-row">
+      <button class="btn-outline" id="repoPublishBtn">一键上传</button>
+      <button class="btn-solid" id="repoDeleteBtn">删除</button>
+    </div>
+    <p class="hint" style="margin-top:6px;">已选 ${repoPicked.size} 张。一键上传只能选「自己整理」里带链接的，站内下载的和本地图片不能发布。</p>` : ''}
+    ${items.length ? `<div class="repo-grid" id="repoGrid">${items.map(repoCellHtml).join('')}</div>`
+      : `<div class="repo-empty">${repoItems.length ? '这个筛选下没有内容' : '仓库还是空的。<br>从站内下载表情包会自动存进来，<br>也可以点上面「添加表情」自己放。'}</div>`}
+    <div style="height:20px;"></div>`;
+
+  pane.querySelectorAll('[data-src]').forEach(b=>b.addEventListener('click', ()=>{
+    repoSourceFilter = b.dataset.src; renderRepo();
+  }));
+  pane.querySelectorAll('[data-folder]').forEach(b=>b.addEventListener('click', ()=>{
+    repoFolderFilter = b.dataset.folder; renderRepo();
+  }));
+  $('repoNewFolderBtn').addEventListener('click', openRepoFolderSheet);
+  $('repoSettingsBtn').addEventListener('click', openRepoSettingsSheet);
+  $('repoAddBtn').addEventListener('click', openRepoAddSheet);
+  $('repoPickBtn').addEventListener('click', ()=>{
+    repoPickMode = !repoPickMode; repoPicked = new Set(); renderRepo();
+  });
+  if(repoPickMode){
+    $('repoPickAllBtn').addEventListener('click', ()=>{
+      const vis = repoVisibleItems();
+      repoPicked = repoPicked.size === vis.length ? new Set() : new Set(vis.map(x=>x.id));
+      renderRepo();
+    });
+    $('repoMoveBtn').addEventListener('click', openRepoMoveSheet);
+    $('repoExportBtn').addEventListener('click', repoExportPicked);
+    $('repoPublishBtn').addEventListener('click', repoPublishPicked);
+    $('repoDeleteBtn').addEventListener('click', repoDeletePicked);
+  }
+  pane.querySelectorAll('.repo-cell').forEach(cell=>{
+    cell.addEventListener('click', ()=>{
+      const it = repoItems.find(x=>x.id===cell.dataset.id);
+      if(!it) return;
+      if(repoPickMode){
+        repoPicked.has(it.id) ? repoPicked.delete(it.id) : repoPicked.add(it.id);
+        renderRepo();
+      } else openRepoItemSheet(it);
+    });
+  });
+  fillRepoBlobs(pane);
+}
+
+function repoCellHtml(it){
+  const picked = repoPicked.has(it.id);
+  const dim = repoPickMode && !repoCanPublish(it) ? '' : '';   // 选择时不禁用，禁用只发生在上传那一步
+  return `<div class="repo-cell${dim}" data-id="${esc(it.id)}">
+    ${it.hasBlob ? `<img data-blob="${esc(it.id)}" alt="">`
+                 : `<img src="${esc(it.url)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.opacity=0">`}
+    ${it.source==='site' ? `<div class="src">站内</div>` : ''}
+    ${repoPickMode ? `<div class="pick ${picked?'on':''}">${picked?'<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>':''}</div>` : ''}
+    ${it.desc ? `<div class="cap">${esc(it.desc)}</div>` : ''}
+  </div>`;
+}
+// 缓存在本地的图片是 Blob，要转成 objectURL 才能给 <img>。
+// 转好的存起来复用，不然每次重画都新建一个，全都泄漏在内存里。
+async function fillRepoBlobs(root){
+  const els = Array.from(root.querySelectorAll('img[data-blob]'));
+  for(const el of els){
+    const id = el.dataset.blob;
+    let u = repoBlobUrls.get(id);
+    if(!u){
+      const blob = await repoGetBlob(id);
+      if(!blob) continue;
+      u = URL.createObjectURL(blob);
+      repoBlobUrls.set(id, u);
+    }
+    el.src = u;
+  }
+}
+
+/* ---- 文件夹 ---- */
+function openRepoFolderSheet(){
+  let name = '';
+  $('repoSheetMask').classList.add('open');
+  draw();
+  function draw(){
+    $('repoSheetBox').innerHTML = `
+      <div class="sheet-head"><span class="t">文件夹</span><button class="icon-btn" id="rfClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button></div>
+      <div class="sheet-scroll">
+        <div class="field-label" style="margin-top:0;">新建文件夹</div>
+        <div style="display:flex; gap:8px;">
+          <input class="field-input" id="rfName" style="flex:1;" maxlength="20" placeholder="给夹子起个名字" value="${esc(name)}">
+          <button class="btn-solid" id="rfAdd" style="width:auto; flex:0 0 auto; padding:0 16px;">新建</button>
+        </div>
+        ${repoFolders.length ? `<div class="field-label">已有的</div><div class="row-list">${repoFolders.map(f=>`
+          <div class="row-item">
+            <div class="row-main"><div style="font-size:13px;">${esc(f.name)}</div>
+              <div style="font-size:11px; color:var(--text-dim); margin-top:2px;">${repoItems.filter(x=>x.folder===f.id).length} 张</div></div>
+            <button class="icon-btn" data-del="${esc(f.id)}" aria-label="删除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/></svg></button>
+          </div>`).join('')}</div>
+          <p class="field-help">删掉文件夹不会删里面的图，它们会回到「未分类」。</p>` : ''}
+      </div>`;
+    $('rfClose').addEventListener('click', ()=>$('repoSheetMask').classList.remove('open'));
+    $('rfName').addEventListener('input', e=>{ name = e.target.value; });
+    $('rfAdd').addEventListener('click', async ()=>{
+      const el = $('rfName'); name = el ? el.value : name;
+      const f = await repoAddFolder(name);
+      if(!f){ showToast('先起个名字'); return; }
+      name = ''; showToast('已新建'); draw(); renderRepo();
+    });
+    $('repoSheetBox').querySelectorAll('[data-del]').forEach(b=>{
+      b.addEventListener('click', async ()=>{
+        await repoRemoveFolder(b.dataset.del);
+        if(repoFolderFilter === b.dataset.del) repoFolderFilter = 'all';
+        showToast('已删除'); draw(); renderRepo();
+      });
+    });
+  }
+}
+function openRepoMoveSheet(){
+  if(!repoPicked.size){ showToast('先选几张'); return; }
+  $('repoSheetMask').classList.add('open');
+  $('repoSheetBox').innerHTML = `
+    <div class="sheet-head"><span class="t">移到哪个文件夹（${repoPicked.size} 张）</span><button class="icon-btn" id="rmClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button></div>
+    <div class="sheet-scroll">
+      <div class="chip-row">
+        <button class="chip" data-to="">未分类</button>
+        ${repoFolders.map(f=>`<button class="chip" data-to="${esc(f.id)}">${esc(f.name)}</button>`).join('')}
+      </div>
+      ${repoFolders.length ? '' : '<p class="hint" style="margin-top:10px;">还没有文件夹，先去上面「＋ 文件夹」建一个。</p>'}
+    </div>`;
+  $('rmClose').addEventListener('click', ()=>$('repoSheetMask').classList.remove('open'));
+  $('repoSheetBox').querySelectorAll('[data-to]').forEach(b=>{
+    b.addEventListener('click', async ()=>{
+      for(const id of repoPicked) await repoUpdate(id, { folder: b.dataset.to });
+      $('repoSheetMask').classList.remove('open');
+      showToast('已移动'); repoPicked = new Set(); renderRepo();
+    });
+  });
+}
+
+/* ---- 添加 / 编辑单条 ---- */
+function openRepoAddSheet(){
+  let text = '';
+  $('repoSheetMask').classList.add('open');
+  $('repoSheetBox').innerHTML = `
+    <div class="sheet-head"><span class="t">添加表情</span><button class="icon-btn" id="raClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button></div>
+    <div class="sheet-scroll">
+      <div class="field-label" style="margin-top:0;">粘贴链接</div>
+      <div class="composer"><textarea class="field" id="raText" placeholder="每行一条，可以带描述：&#10;笑死：https://example.com/a.png&#10;https://example.com/b.png" style="min-height:120px;"></textarea></div>
+      <p class="field-help">格式跟发布页的导入一样，「描述+分隔符+链接」或者只有链接都行。</p>
+      <div class="btn-row"><button class="btn-solid" id="raAddUrl">加进仓库</button></div>
+      <div class="field-label">或者从相册选图</div>
+      <p class="field-help">图片直接存在你自己手机的浏览器里，不会上传。<b>本地图片不能一键上传发布</b>，要发布得先传图床拿到链接。</p>
+      <div class="btn-row"><button class="btn-outline" id="raPickFile">选择图片</button></div>
+      <input type="file" id="raFile" accept="image/*" multiple>
+    </div>`;
+  $('raClose').addEventListener('click', ()=>$('repoSheetMask').classList.remove('open'));
+  $('raText').addEventListener('input', e=>{ text = e.target.value; });
+  $('raAddUrl').addEventListener('click', async ()=>{
+    const el = $('raText'); text = el ? el.value : text;
+    // 复用发布页那套解析，格式认得的东西完全一致
+    const rows = text.split('\n').map(l=>l.trim()).filter(Boolean).map(parseLine)
+      .filter(r=>r.url && /^https?:\/\//i.test(r.url))
+      .map(r=>({ source:'mine', url:r.url, desc:r.desc||'' }));
+    if(!rows.length){ showToast('没解析出有效的链接'); return; }
+    const fresh = await repoAdd(rows);
+    $('repoSheetMask').classList.remove('open');
+    showToast(fresh.length ? `已加入 ${fresh.length} 张` : '这些链接仓库里已经有了');
+    if(fresh.length && repoCacheImages()) cacheRepoImages(fresh.map(r=>r.url));
+    renderRepo();
+  });
+  $('raPickFile').addEventListener('click', ()=>$('raFile').click());
+  $('raFile').addEventListener('change', async e=>{
+    const files = Array.from(e.target.files||[]);
+    if(!files.length) return;
+    let n = 0;
+    for(const f of files){
+      if(!f.type.startsWith('image/')) continue;
+      const added = await repoAdd([{ source:'mine', url:'', desc: f.name.replace(/\.[^.]+$/,'').slice(0,20) }]);
+      if(!added.length) continue;
+      try{ await repoPutBlob(added[0].id, f); n++; }
+      catch(err){ showToast('存不下了，浏览器空间可能满了'); break; }
+    }
+    e.target.value = '';
+    $('repoSheetMask').classList.remove('open');
+    showToast(n ? `已加入 ${n} 张` : '没有加入任何图片');
+    renderRepo();
+  });
+}
+
+function openRepoItemSheet(it){
+  let desc = it.desc || '';
+  $('repoSheetMask').classList.add('open');
+  draw();
+  function draw(){
+    $('repoSheetBox').innerHTML = `
+      <div class="sheet-head"><span class="t">${it.source==='site'?'站内下载':'自己整理'}</span><button class="icon-btn" id="riClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button></div>
+      <div class="sheet-scroll">
+        <div style="display:flex; justify-content:center; margin-bottom:12px;">
+          <img id="riImg" src="${it.hasBlob?'':esc(it.url)}" alt="" referrerpolicy="no-referrer" style="max-width:160px; max-height:160px; border-radius:var(--radius-s);" onerror="this.style.opacity=0">
+        </div>
+        ${it.fromTitle ? `<p class="hint" style="margin-top:0;">来自《${esc(it.fromTitle)}》${it.fromAuthor?` · ${esc(it.fromAuthor)}`:''}</p>` : ''}
+        <div class="field-label" style="margin-top:0;">描述</div>
+        <input class="field-input" id="riDesc" maxlength="20" value="${esc(desc)}" placeholder="给它写个描述">
+        <div class="field-label">文件夹</div>
+        <div class="chip-row">
+          <button class="chip ${!it.folder?'active':''}" data-to="">未分类</button>
+          ${repoFolders.map(f=>`<button class="chip ${it.folder===f.id?'active':''}" data-to="${esc(f.id)}">${esc(f.name)}</button>`).join('')}
+        </div>
+        ${it.url ? `<div class="field-label">链接</div>
+        <div class="key-row"><input class="field-input" id="riUrl" readonly value="${esc(it.url)}"><button class="icon-btn" id="riCopy">复制</button></div>`
+                 : `<p class="field-help" style="margin-top:12px;">这是本地图片，没有链接，<b>不能一键上传发布</b>。</p>`}
+        <div class="btn-row" style="margin-top:18px;">
+          <button class="btn-outline" id="riSave">保存</button>
+          <button class="btn-solid" id="riDel">从仓库删除</button>
+        </div>
+        <div style="height:16px;"></div>
+      </div>`;
+    if(it.hasBlob) fillRepoBlobs($('repoSheetBox').parentElement || document);
+    if(it.hasBlob) repoGetBlob(it.id).then(b=>{ if(b && $('riImg')) $('riImg').src = URL.createObjectURL(b); });
+    $('riClose').addEventListener('click', ()=>$('repoSheetMask').classList.remove('open'));
+    $('riDesc').addEventListener('input', e=>{ desc = e.target.value; });
+    $('repoSheetBox').querySelectorAll('[data-to]').forEach(b=>{
+      b.addEventListener('click', async ()=>{
+        const el = $('riDesc'); if(el) desc = el.value;
+        await repoUpdate(it.id, { folder: b.dataset.to }); draw(); renderRepo();
+      });
+    });
+    const copy = $('riCopy');
+    if(copy) copy.addEventListener('click', async ()=>{
+      try{ await navigator.clipboard.writeText(it.url); showToast('已复制'); }catch(e){ showToast('复制失败'); }
+    });
+    $('riSave').addEventListener('click', async ()=>{
+      const el = $('riDesc'); if(el) desc = el.value;
+      await repoUpdate(it.id, { desc: desc.trim() });
+      $('repoSheetMask').classList.remove('open'); showToast('已保存'); renderRepo();
+    });
+    $('riDel').addEventListener('click', async ()=>{
+      await repoRemove([it.id]);
+      $('repoSheetMask').classList.remove('open'); showToast('已删除'); renderRepo();
+    });
+  }
+}
+
+/* ---- 批量：导出 / 上传 / 删除 ---- */
+function repoExportPicked(){
+  const picked = repoItems.filter(it=>repoPicked.has(it.id));
+  if(!picked.length){ showToast('先选几张'); return; }
+  const withUrl = picked.filter(it=>(it.url||'').trim());
+  if(!withUrl.length){ showToast('选中的都是本地图片，没有链接可以导出'); return; }
+  $('repoSheetMask').classList.add('open');
+  renderFormatSheet('repoSheetBox', {
+    rows: withUrl.map(it=>({ desc: it.desc || '', url: it.url })),
+    head: [],   // 自己的仓库，不带别人作品的使用权限声明
+    filename: `我的仓库_${withUrl.length}张`,
+    onClose: ()=>$('repoSheetMask').classList.remove('open'),
+  });
+  if(withUrl.length < picked.length){
+    showToast(`${picked.length-withUrl.length} 张本地图片没有链接，已跳过`);
+  }
+}
+
+function repoDeletePicked(){
+  if(!repoPicked.size){ showToast('先选几张'); return; }
+  const n = repoPicked.size;
+  openConfirmSheet('从仓库删除？', `${n} 张会被删掉，本地图片一并清除，无法恢复。`, '删除', async ()=>{
+    await repoRemove(Array.from(repoPicked));
+    repoPicked = new Set(); showToast('已删除'); renderRepo();
+  });
+}
+
+// 一键上传。两道门：
+//   1. 站内下载的和本地图片直接筛掉 —— 前者是别人的作品，后者发出去别人取不到图
+//   2. 剩下的还要你自己确认一遍这确实是你整理的内容
+function repoPublishPicked(){
+  const picked = repoItems.filter(it=>repoPicked.has(it.id));
+  if(!picked.length){ showToast('先选几张'); return; }
+  const ok = picked.filter(repoCanPublish);
+  const fromSite = picked.filter(it=>it.source==='site').length;
+  const localOnly = picked.filter(it=>it.source==='mine' && !(it.url||'').trim()).length;
+
+  if(!ok.length){
+    if(localOnly && !fromSite){
+      showToast('上传失败：本地图片请先转成图床链接');
+    } else if(fromSite && !localOnly){
+      showToast('站内下载的作品不能再上传');
+    } else {
+      showToast('选中的都不能上传（站内下载的 / 本地图片）');
+    }
+    return;
+  }
+  const skipped = [];
+  if(fromSite)   skipped.push(`${fromSite} 张站内下载的`);
+  if(localOnly)  skipped.push(`${localOnly} 张本地图片（请先转图床链接）`);
+
+  openConfirmSheet(
+    '请确认该内容是你自行整理的内容',
+    `将把 ${ok.length} 张放进发布页。${skipped.length?`已跳过：${skipped.join('、')}。`:''}\n请确认这些内容由你自行整理，不是直接搬运他人作品。`,
+    '确认，去发布',
+    ()=>{
+      pubItems = ok.map(it=>({ id:uid(), url:it.url, desc:it.desc||'', status:'idle', source:'' }));
+      editingCollectionId = null;
+      pubNeedsDesc = false; renderNeedsDescCheck();
+      batchMode = false; batchSelected = new Set();
+      updateEditingBanner(); renderPubItems();
+      repoPickMode = false; repoPicked = new Set();
+      $('repoSheetMask').classList.remove('open');
+      showPage('publish');
+      showToast(`已放进发布页（${ok.length} 张）`);
+    });
+}
+
+
+/* ---- 仓库设置 + 备份 ---- */
+// 浏览器存储是会没的：清缓存、换手机、无痕模式都会丢，iOS Safari 更狠，
+// 放着几天不打开就可能被系统清掉。所以备份不是锦上添花，是必需品。
+// 备份包是个 zip：图片以原始二进制存在里面，不 base64，体积不虚胖。
+async function repoExportBackup(){
+  if(typeof JSZip === 'undefined'){ showToast('压缩组件没加载成功，刷新页面再试'); return; }
+  showToast('正在打包…');
+  try{
+    const zip = new JSZip();
+    const blobTypes = {};
+    const withBlob = repoItems.filter(it=>it.hasBlob);
+    for(const it of withBlob){
+      const blob = await repoGetBlob(it.id);
+      if(!blob) continue;
+      blobTypes[it.id] = blob.type || 'image/png';
+      zip.file(`blobs/${it.id}`, blob);
+    }
+    zip.file('items.json',   JSON.stringify(repoItems));
+    zip.file('folders.json', JSON.stringify(repoFolders));
+    zip.file('manifest.json', JSON.stringify({
+      app:'Yoww', kind:'repo-backup', version:1,
+      exportedAt: new Date().toISOString(),
+      itemCount: repoItems.length, folderCount: repoFolders.length,
+      blobTypes,
+    }, null, 2));
+    const out = await zip.generateAsync({ type:'blob', compression:'DEFLATE', compressionOptions:{ level:6 } });
+    const d = new Date();
+    const stamp = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`;
+    downloadBlob(out, `Yoww我的仓库备份_${stamp}.zip`);
+    showToast(`已导出 ${repoItems.length} 张`);
+  }catch(e){
+    showToast('导出失败：'+(e && e.message ? e.message : '未知错误'));
+  }
+}
+
+// 导入是「合并」不是「覆盖」：同一条（按 来源+链接 判重）不会重复进来，
+// 但已经在仓库里的东西一条都不会被删。换手机导回来、两台设备各存了一些，
+// 都是合并才对；覆盖的话一不小心就把这边攒的全冲没了。
+async function repoImportBackup(file){
+  if(typeof JSZip === 'undefined'){ showToast('压缩组件没加载成功，刷新页面再试'); return; }
+  showToast('正在读取…');
+  try{
+    const zip = await JSZip.loadAsync(file);
+    const mf = zip.file('manifest.json');
+    if(!mf) throw new Error('这不是仓库备份包');
+    const manifest = JSON.parse(await mf.async('string'));
+    if(manifest.kind !== 'repo-backup') throw new Error('这不是仓库备份包');
+
+    const itemsFile = zip.file('items.json');
+    const items = itemsFile ? JSON.parse(await itemsFile.async('string')) : [];
+    const foldersFile = zip.file('folders.json');
+    const folders = foldersFile ? JSON.parse(await foldersFile.async('string')) : [];
+
+    // 文件夹先并进来，不然条目的 folder 会指向一个不存在的夹子，
+    // 那些图就既不在任何夹子里、也不显示在「未分类」，等于凭空消失
+    const haveFolder = new Set(repoFolders.map(f=>f.id));
+    const newFolders = folders.filter(f=>f && f.id && !haveFolder.has(f.id));
+    if(newFolders.length){
+      await repoTx(['folders'],'readwrite', tx=>{ const s=tx.objectStore('folders'); newFolders.forEach(f=>s.put(f)); });
+      repoFolders = repoFolders.concat(newFolders).sort((a,b)=>a.createdAt-b.createdAt);
+    }
+
+    const haveKey = new Set(repoItems.map(it=>it.source+'|'+(it.url||'')));
+    const haveId  = new Set(repoItems.map(it=>it.id));
+    const fresh = items.filter(it=>{
+      if(!it || !it.id || haveId.has(it.id)) return false;
+      if(it.url && haveKey.has(it.source+'|'+it.url)) return false;
+      if(it.url) haveKey.add(it.source+'|'+it.url);
+      return true;
+    });
+    if(fresh.length){
+      await repoTx(['items'],'readwrite', tx=>{ const s=tx.objectStore('items'); fresh.forEach(it=>s.put(it)); });
+      repoItems = fresh.concat(repoItems).sort((a,b)=>b.addedAt-a.addedAt);
+    }
+
+    // 图片本体。存不下就停手并说清楚——已经导进来的条目还在，
+    // 只是后面几张没有离线副本，比整个失败强
+    let blobDone = 0;
+    for(const it of fresh){
+      if(!it.hasBlob) continue;
+      const f = zip.file(`blobs/${it.id}`);
+      if(!f){ await repoUpdate(it.id, { hasBlob:false }); continue; }
+      try{
+        const raw = await f.async('blob');
+        await repoPutBlob(it.id, new Blob([raw], { type:(manifest.blobTypes||{})[it.id] || 'image/png' }));
+        blobDone++;
+      }catch(e){
+        await repoUpdate(it.id, { hasBlob:false });
+        showToast('浏览器空间不够，部分图片没导进来');
+        break;
+      }
+    }
+    showToast(fresh.length ? `已导入 ${fresh.length} 张${blobDone?`（含 ${blobDone} 张图片）`:''}` : '备份里的内容仓库里都已经有了');
+    renderRepo();
+  }catch(e){
+    showToast('导入失败：'+(e && e.message ? e.message : '文件读不出来'));
+  }
+}
+
+function openRepoSettingsSheet(){
+  $('repoSheetMask').classList.add('open');
+  draw();
+  function draw(){
+    const on = repoCacheImages();
+    const cached = repoItems.filter(it=>it.hasBlob).length;
+    $('repoSheetBox').innerHTML = `
+      <div class="sheet-head"><span class="t">仓库设置</span><button class="icon-btn" id="rsClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button></div>
+      <div class="sheet-scroll">
+        <div class="perm-list">
+          <div class="perm-row" id="rsCacheRow">
+            <div class="sel-check-inline ${on?'on':''}">${on?CHECK_SVG:''}</div>
+            <span class="perm-label">把图片本体也存到本地</span>
+          </div>
+        </div>
+        <p class="field-help">打开之后，新存进仓库的图会连图片一起下载到本机。<b>图床挂了、链接失效了，你仓库里的图还在</b>，也能离线看。代价是占地方，备份包也会大很多。<br>目前已存图片：${cached} 张。</p>
+
+        <div class="field-label">备份</div>
+        <p class="field-help">仓库只存在这个浏览器里。<b>清缓存、换手机、无痕模式都会让它全部消失</b>；iOS 上放着几天不打开也可能被系统清掉。定期导出一份存到微信收藏或网盘，换设备时导回来。</p>
+        <div class="btn-row">
+          <button class="btn-outline" id="rsExport">导出备份</button>
+          <button class="btn-outline" id="rsImport">导入备份</button>
+        </div>
+        <input type="file" id="rsFile" accept=".zip">
+        <p class="field-help">导入是<b>合并</b>：同一张图不会重复进来，你现在仓库里的东西也一条都不会少。</p>
+        <div style="height:16px;"></div>
+      </div>`;
+    $('rsClose').addEventListener('click', ()=>$('repoSheetMask').classList.remove('open'));
+    $('rsCacheRow').addEventListener('click', ()=>{ setRepoCacheImages(!repoCacheImages()); draw(); });
+    $('rsExport').addEventListener('click', repoExportBackup);
+    $('rsImport').addEventListener('click', ()=>$('rsFile').click());
+    $('rsFile').addEventListener('change', async e=>{
+      const f = e.target.files && e.target.files[0];
+      e.target.value = '';
+      if(!f) return;
+      $('repoSheetMask').classList.remove('open');
+      await repoImportBackup(f);
+    });
+  }
+}
+
 /* ===================== my (IG-style) ===================== */
 let myTab = 'works';
 function setMyTab(tab){
@@ -2737,6 +3479,11 @@ document.querySelectorAll('.ig-tab, .ig-stat').forEach(el=>{
 });
 function renderMy(){
   renderProfileBits();
+  // 仓库是本地数据、自己一套界面，跟上面三个 tab 的作品网格不是一回事
+  const isRepo = myTab === 'repo';
+  $('myGrid').style.display = isRepo ? 'none' : '';
+  $('myRepoPane').style.display = isRepo ? '' : 'none';
+  if(isRepo){ renderRepo(); return; }
   let items, emptyText, action;
   if(myTab==='works'){
     items = [
@@ -3116,79 +3863,101 @@ function openDownloadSheet(c){
 
   function renderFormatStep(){
     const chosen = c.emojis.filter(e=>selected.has(e.id));
-    let fmt = 'fullcolon';
-    let customSep = '|';
-    const sep = () => fmt==='custom' ? customSep : FORMATS.find(f=>f.id===fmt).sep;
-    const currentText = () => {
-      const mainLines = chosen.map(e=>`${descOf(e)}${sep()}${e.url}`).join('\n');
-      const sources = new Set();
-      if(c.source && c.source.trim()) sources.add(c.source.trim());
-      chosen.forEach(e=>{ if(e.source && e.source.trim()) sources.add(e.source.trim()); });
-      const parts = [permissionHeaderText(c)];
-      if(sources.size) parts.push(`来源：${Array.from(sources).join('、')}`);
-      parts.push(mainLines);
-      return parts.join('\n\n');
-    };
-
-    function draw(){
-      $('dlSheetBox').innerHTML = `
-        <div class="sheet-head"><span class="t">选择导出格式</span><button class="icon-btn" id="dlCloseBtn2"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button></div>
-        <div class="sheet-scroll">
-          <div class="chip-row" id="fmtChipRow"></div>
-          <div class="custom-sep-row" id="fmtCustomRow" style="display:${fmt==='custom'?'flex':'none'}; margin-top:8px;">
-            <span style="font-size:12px;color:var(--text-dim);">分隔符</span>
-            <input class="field-input" id="fmtCustomInput" style="width:90px;" maxlength="6" value="${esc(customSep)}">
-          </div>
-          <div class="field-label">示例格式（可编辑后点"按示例"识别分隔符）</div>
-          <div style="display:flex; gap:8px;">
-            <input class="field-input" id="fmtExampleInput" style="flex:1;" value="${esc((chosen[0]&&descOf(chosen[0]))||'真的服了')}${esc(sep())}${esc((chosen[0]&&chosen[0].url)||'https://example.com/a.png')}">
-            <button class="btn-outline" id="fmtUseExampleBtn" style="width:auto; white-space:nowrap; flex:0 0 auto; padding:0 12px;">按示例</button>
-          </div>
-          <div class="field-label">预览</div>
-          <pre class="result-pre" id="fmtPreview">${esc(currentText())}</pre>
-        </div>
-        <div class="sheet-footer">
-          <div class="btn-row" style="margin-top:0;">
-            <button class="btn-outline" id="dlCopyBtn">复制</button>
-            <button class="btn-outline" id="dlTxtBtn">下载 .txt</button>
-            <button class="btn-outline" id="dlDocxBtn">下载 .docx</button>
-          </div>
-        </div>
-      `;
-      const wrap = $('fmtChipRow'); wrap.innerHTML='';
-      FORMATS.forEach(f=>{
-        const b=document.createElement('button'); b.className='chip'+(fmt===f.id?' active':''); b.textContent=f.label;
-        b.addEventListener('click', ()=>{ fmt=f.id; draw(); });
-        wrap.appendChild(b);
-      });
-      const cb=document.createElement('button'); cb.className='chip'+(fmt==='custom'?' active':''); cb.textContent='自定义';
-      cb.addEventListener('click', ()=>{ fmt='custom'; draw(); });
-      wrap.appendChild(cb);
-
-      $('dlCloseBtn2').addEventListener('click', ()=>$('dlSheetMask').classList.remove('open'));
-      const ci = $('fmtCustomInput'); if(ci) ci.addEventListener('input', e=>{ customSep=e.target.value; $('fmtPreview').textContent=currentText(); });
-      $('fmtUseExampleBtn').addEventListener('click', ()=>{
-        const example = $('fmtExampleInput').value;
-        const m = example.match(/https?:\/\//i);
-        if(!m || m.index===0){ showToast('示例需写成"描述+分隔符+链接"'); return; }
-        const before = example.slice(0, m.index);
-        const dm = before.match(/^\s*([^\s:：|,，\-]+)/);
-        if(!dm){ showToast('示例中没有找到描述'); return; }
-        const newSep = before.slice(dm[0].length);
-        if(!newSep){ showToast('示例中没有找到分隔符'); return; }
-        fmt='custom'; customSep=newSep; draw(); showToast('已按示例识别格式');
-      });
-      $('dlCopyBtn').addEventListener('click', async ()=>{
-        try{ await navigator.clipboard.writeText(currentText()); showToast('已复制'); }catch(e){ showToast('复制失败'); }
-      });
-      $('dlTxtBtn').addEventListener('click', ()=> downloadBlob(new Blob([currentText()],{type:'text/plain;charset=utf-8'}), `${safeFilename(c.title)}_${safeFilename(c.author)}.txt`));
-      $('dlDocxBtn').addEventListener('click', async ()=>{
-        try{ downloadBlob(await buildDocxBlob(currentText()), `${safeFilename(c.title)}_${safeFilename(c.author)}.docx`); }
-        catch(e){ showToast('生成 docx 失败'); }
-      });
-    }
-    draw();
+    const sources = new Set();
+    if(c.source && c.source.trim()) sources.add(c.source.trim());
+    chosen.forEach(e=>{ if(e.source && e.source.trim()) sources.add(e.source.trim()); });
+    const head = [permissionHeaderText(c)];
+    if(sources.size) head.push(`来源：${Array.from(sources).join('、')}`);
+    renderFormatSheet('dlSheetBox', {
+      rows: chosen.map(e=>({ desc: descOf(e), url: e.url })),
+      head,
+      filename: `${safeFilename(c.title)}_${safeFilename(c.author)}`,
+      onClose: ()=>$('dlSheetMask').classList.remove('open'),
+      onExport: ()=>saveDownloadToRepo(c, chosen, descOf),
+    });
   }
+}
+
+// 「描述+分隔符+链接」的导出面板。下载表情包和我的仓库用的是同一套东西
+// —— 同一组分隔符预设、同一个"按示例识别"、同样的复制/txt/docx，
+// 只是数据来源和标题不同，所以抽出来一份，不各写各的。
+//   boxId    画到哪个弹层里（下载那边是多步流程的最后一步，仓库那边是独立弹层）
+//   rows     [{desc, url}]
+//   head     正文前面要加的段落（使用权限、来源之类），没有就传空数组
+//   onExport 真的导出成功之后回调一次（下载那边用它把这次的内容存进仓库）
+function renderFormatSheet(boxId, opts){
+  const rows = opts.rows || [];
+  const head = opts.head || [];
+  let fmt = 'fullcolon';
+  let customSep = '|';
+  const sep = () => fmt==='custom' ? customSep : FORMATS.find(f=>f.id===fmt).sep;
+  // 没有描述的就只输出链接。带一个孤零零的分隔符（"：https://…"）
+  // 既难看，粘回导入框里也会被当成"描述是空字符串"再解析一遍
+  const line = r => r.desc ? `${r.desc}${sep()}${r.url}` : r.url;
+  const currentText = () => head.concat([rows.map(line).join('\n')]).join('\n\n');
+  // 只在真的导出成功之后才回调。失败了不该算作"已下载"，更不该入库
+  const done = ()=>{ if(opts.onExport){ try{ opts.onExport(); }catch(e){ console.warn('入库失败：', e && e.message); } } };
+
+  function draw(){
+    $(boxId).innerHTML = `
+      <div class="sheet-head"><span class="t">选择导出格式</span><button class="icon-btn" id="fmtCloseBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button></div>
+      <div class="sheet-scroll">
+        <div class="chip-row" id="fmtChipRow"></div>
+        <div class="custom-sep-row" id="fmtCustomRow" style="display:${fmt==='custom'?'flex':'none'}; margin-top:8px;">
+          <span style="font-size:12px;color:var(--text-dim);">分隔符</span>
+          <input class="field-input" id="fmtCustomInput" style="width:90px;" maxlength="6" value="${esc(customSep)}">
+        </div>
+        <div class="field-label">示例格式（可编辑后点"按示例"识别分隔符）</div>
+        <div style="display:flex; gap:8px;">
+          <input class="field-input" id="fmtExampleInput" style="flex:1;" value="${esc((rows[0]&&rows[0].desc)||'真的服了')}${esc(sep())}${esc((rows[0]&&rows[0].url)||'https://example.com/a.png')}">
+          <button class="btn-outline" id="fmtUseExampleBtn" style="width:auto; white-space:nowrap; flex:0 0 auto; padding:0 12px;">按示例</button>
+        </div>
+        <div class="field-label">预览</div>
+        <pre class="result-pre" id="fmtPreview">${esc(currentText())}</pre>
+      </div>
+      <div class="sheet-footer">
+        <div class="btn-row" style="margin-top:0;">
+          <button class="btn-outline" id="dlCopyBtn">复制</button>
+          <button class="btn-outline" id="dlTxtBtn">下载 .txt</button>
+          <button class="btn-outline" id="dlDocxBtn">下载 .docx</button>
+        </div>
+      </div>
+    `;
+    const wrap = $('fmtChipRow'); wrap.innerHTML='';
+    FORMATS.forEach(f=>{
+      const b=document.createElement('button'); b.className='chip'+(fmt===f.id?' active':''); b.textContent=f.label;
+      b.addEventListener('click', ()=>{ fmt=f.id; draw(); });
+      wrap.appendChild(b);
+    });
+    const cb=document.createElement('button'); cb.className='chip'+(fmt==='custom'?' active':''); cb.textContent='自定义';
+    cb.addEventListener('click', ()=>{ fmt='custom'; draw(); });
+    wrap.appendChild(cb);
+
+    $('fmtCloseBtn').addEventListener('click', opts.onClose);
+    const ci = $('fmtCustomInput'); if(ci) ci.addEventListener('input', e=>{ customSep=e.target.value; $('fmtPreview').textContent=currentText(); });
+    $('fmtUseExampleBtn').addEventListener('click', ()=>{
+      const example = $('fmtExampleInput').value;
+      const m = example.match(/https?:\/\//i);
+      if(!m || m.index===0){ showToast('示例需写成"描述+分隔符+链接"'); return; }
+      const before = example.slice(0, m.index);
+      const dm = before.match(/^\s*([^\s:：|,，\-]+)/);
+      if(!dm){ showToast('示例中没有找到描述'); return; }
+      const newSep = before.slice(dm[0].length);
+      if(!newSep){ showToast('示例中没有找到分隔符'); return; }
+      fmt='custom'; customSep=newSep; draw(); showToast('已按示例识别格式');
+    });
+    $('dlCopyBtn').addEventListener('click', async ()=>{
+      try{ await navigator.clipboard.writeText(currentText()); showToast('已复制'); done(); }catch(e){ showToast('复制失败'); }
+    });
+    $('dlTxtBtn').addEventListener('click', ()=>{
+      downloadBlob(new Blob([currentText()],{type:'text/plain;charset=utf-8'}), `${opts.filename}.txt`); done();
+    });
+    $('dlDocxBtn').addEventListener('click', async ()=>{
+      try{ downloadBlob(await buildDocxBlob(currentText()), `${opts.filename}.docx`); done(); }
+      catch(e){ showToast('生成 docx 失败'); }
+    });
+  }
+  draw();
 }
 
 /* ===================== publish: type toggle (collections vs fonts) ===================== */
