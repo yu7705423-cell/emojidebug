@@ -245,7 +245,8 @@
   .entry-row .arr{width:15px; height:15px; color:var(--text-faint);}
 
   /* 安静的一行统计 + 右侧一个文字按钮，替掉原来两行实心按钮 */
-  .repo-line{display:flex; align-items:center; gap:10px; padding:14px 18px 0; font-size:11.5px; color:var(--text-faint);}
+  .repo-tabs{padding:14px 18px 0;}
+  .repo-line{display:flex; align-items:center; gap:10px; padding:12px 18px 0; font-size:11.5px; color:var(--text-faint);}
   .repo-line .grow{flex:1;}
   .repo-line button{background:none; border:none; padding:0; font-size:12px; font-weight:600; color:var(--ink); cursor:pointer;}
   .repo-chips{padding:12px 18px 0;}
@@ -2972,9 +2973,12 @@ async function repoRemoveFolder(fid){
 
 
 /* ===================== 我的仓库：界面 ===================== */
-// 一个筛选轴就够。原来「来源」和「文件夹」是两行两个轴，看着像把同一件事
-// 排了两遍；站内下载本来就是一个天然的桶，跟文件夹并排最直白。
-let repoFolderFilter = 'all';   // 'all' | 'none' | 'site' | folderId
+// 两层：顶上是大 tab 分来源，下面是文件夹。
+// 站内下载的东西一样要能分文件夹，所以来源不能塞进文件夹那一行当一个桶
+// —— 那样"站内的猫猫"就没地方放了。两个轴交叉筛。
+// 文件夹是两边共用的一套：同一个「猫猫」在两个 tab 下各看各的，不用建两遍。
+let repoTab = 'site';           // 'site' | 'mine'
+let repoFolderFilter = 'all';   // 'all' | 'none' | folderId
 let repoPickMode = false;
 let repoPicked = new Set();
 
@@ -3008,8 +3012,8 @@ async function cacheRepoImages(urls){
 
 function repoVisibleItems(){
   return repoItems.filter(it=>{
+    if(it.source !== repoTab) return false;
     if(repoFolderFilter === 'all')  return true;
-    if(repoFolderFilter === 'site') return it.source === 'site';
     if(repoFolderFilter === 'none') return !it.folder;
     return it.folder === repoFolderFilter;
   });
@@ -3043,17 +3047,22 @@ function renderRepo(){
     : `<button class="icon-btn" id="repoAddBtn" aria-label="添加"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg></button>
        <button class="icon-btn" id="repoSettingsBtn" aria-label="设置"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>`;
 
-  // 一行 chip 就够了。原来「来源」和「文件夹」两行两个轴，看着像重复了一遍；
-  // 站内下载本来就是一个天然的桶，跟文件夹并排放最直白
+  const mineCount = repoItems.length - siteCount;
+  const inTab = repoItems.filter(x=>x.source===repoTab).length;
   const chips = [{ id:'all', name:'全部' }, { id:'none', name:'未分类' }]
-    .concat(repoFolders.map(f=>({ id:f.id, name:f.name })))
-    .concat(siteCount ? [{ id:'site', name:'站内下载' }] : []);
+    .concat(repoFolders.map(f=>({ id:f.id, name:f.name })));
 
   body.innerHTML = `
+    <div class="repo-tabs">
+      <div class="type-toggle">
+        <button data-tab="site" class="${repoTab==='site'?'active':''}">站内下载</button>
+        <button data-tab="mine" class="${repoTab==='mine'?'active':''}">我的整理</button>
+      </div>
+    </div>
     <div class="repo-line">
-      <span>共 ${repoItems.length} 张${siteCount?` · ${siteCount} 张来自站内下载`:''}</span>
+      <span>${inTab} 张${repoTab==='site'?`，另有 ${mineCount} 张在我的整理`:`，另有 ${siteCount} 张在站内下载`}</span>
       <span class="grow"></span>
-      ${repoItems.length ? `<button id="repoPickBtn">${repoPickMode?`已选 ${repoPicked.size}`:'选择'}</button>` : ''}
+      ${inTab ? `<button id="repoPickBtn">${repoPickMode?`已选 ${repoPicked.size}`:'选择'}</button>` : ''}
     </div>
     <div class="chip-row repo-chips">
       ${chips.map(f=>`<button class="chip ${repoFolderFilter===f.id?'active':''}" data-folder="${esc(f.id)}">${esc(f.name)}</button>`).join('')}
@@ -3061,19 +3070,23 @@ function renderRepo(){
     </div>
     ${items.length
       ? `<div class="emoji-grid" id="repoGrid">${items.map(repoCellHtml).join('')}</div>`
-      : `<div class="repo-empty">${repoItems.length
-          ? '这个分类下还没有内容'
-          : '仓库还是空的。<br>在站内下载表情包会自动存进来，<br>也可以点右上角的加号自己放。'}</div>`}
+      : `<div class="repo-empty">${inTab
+          ? '这个文件夹下还没有内容'
+          : (repoTab==='site'
+              ? '还没有从站内下载过。<br>在作品详情页点下载并导出，就会自动存进这里。'
+              : '还没有自己放过东西。<br>点右上角的加号，粘链接或从相册选图。')}</div>`}
     <div style="height:8px;"></div>`;
 
   foot.hidden = !repoPickMode;
   if(repoPickMode){
     const n = repoPicked.size;
+    // 站内下载这一栏不放「上传」：那里的东西一律不能再发布，
+    // 摆一个按下去必然被拒绝的按钮没有意义
     foot.innerHTML = `<div class="repo-acts">
       <button id="repoPickAllBtn">${n && n===items.length ? '取消全选' : '全选'}</button>
       <button id="repoMoveBtn" ${n?'':'disabled'}>移动</button>
       <button id="repoExportBtn" ${n?'':'disabled'}>导出</button>
-      <button id="repoPublishBtn" ${n?'':'disabled'}>上传</button>
+      ${repoTab==='mine' ? `<button id="repoPublishBtn" ${n?'':'disabled'}>上传</button>` : ''}
       <button id="repoDeleteBtn" class="warn" ${n?'':'disabled'}>删除</button>
     </div>`;
     $('repoDoneBtn').addEventListener('click', ()=>{ repoPickMode=false; repoPicked=new Set(); renderRepo(); });
@@ -3083,12 +3096,21 @@ function renderRepo(){
     });
     $('repoMoveBtn').addEventListener('click', openRepoMoveSheet);
     $('repoExportBtn').addEventListener('click', repoExportPicked);
-    $('repoPublishBtn').addEventListener('click', repoPublishPicked);
+    const pub = $('repoPublishBtn');
+    if(pub) pub.addEventListener('click', repoPublishPicked);
     $('repoDeleteBtn').addEventListener('click', repoDeletePicked);
   } else {
     $('repoAddBtn').addEventListener('click', openRepoAddSheet);
     $('repoSettingsBtn').addEventListener('click', openRepoSettingsSheet);
   }
+  body.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click', ()=>{
+    if(repoTab === b.dataset.tab) return;
+    // 换 tab 把筛选和已选一起清掉：留着的话会有"选中了但你看不见"的条目，
+    // 一按删除就删掉了不在眼前的东西
+    repoTab = b.dataset.tab; repoFolderFilter = 'all';
+    repoPickMode = false; repoPicked = new Set();
+    renderRepo();
+  }));
   const pick = $('repoPickBtn');
   if(pick) pick.addEventListener('click', ()=>{ repoPickMode=!repoPickMode; repoPicked=new Set(); renderRepo(); });
   body.querySelectorAll('[data-folder]').forEach(b=>b.addEventListener('click', ()=>{
@@ -3112,9 +3134,8 @@ function renderRepo(){
 
 function repoCellHtml(it){
   const picked = repoPicked.has(it.id);
-  const cap = it.source==='site'
-    ? `<i>站内 · </i>${esc(it.desc || it.fromTitle || '未命名')}`
-    : esc(it.desc || '未命名');
+  // 来源已经由上面的大 tab 表达了，格子上不用再标一遍
+  const cap = esc(it.desc || (it.source==='site' ? (it.fromTitle||'未命名') : '未命名'));
   return `<div class="repo-cell${picked?' sel':''}" data-id="${esc(it.id)}">
     <div class="ph">
       ${it.hasBlob ? `<img data-blob="${esc(it.id)}" alt="">`
@@ -3229,6 +3250,8 @@ function openRepoAddSheet(){
     if(!rows.length){ showToast('没解析出有效的链接'); return; }
     const fresh = await repoAdd(rows);
     $('repoSheetMask').classList.remove('open');
+    // 加的都是自己的，切过去才看得见刚加的东西
+    if(fresh.length){ repoTab = 'mine'; repoFolderFilter = 'all'; }
     showToast(fresh.length ? `已加入 ${fresh.length} 张` : '这些链接仓库里已经有了');
     if(fresh.length && repoCacheImages()) cacheRepoImages(fresh.map(r=>r.url));
     renderRepo();
@@ -3247,6 +3270,7 @@ function openRepoAddSheet(){
     }
     e.target.value = '';
     $('repoSheetMask').classList.remove('open');
+    if(n){ repoTab = 'mine'; repoFolderFilter = 'all'; }
     showToast(n ? `已加入 ${n} 张` : '没有加入任何图片');
     renderRepo();
   });
