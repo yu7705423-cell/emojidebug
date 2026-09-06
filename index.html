@@ -269,6 +269,9 @@
   .repo-folder-badge svg{width:12px; height:12px;}
   .repo-folder-crumb{padding:0 18px 4px; font-size:12px; font-weight:600; color:var(--ink); cursor:pointer; display:flex; align-items:center; gap:2px;}
   /* 选择模式的操作条：四个文字按钮一行，不是两行实心按钮 */
+  .folder-acts{display:flex; gap:12px; flex-shrink:0; align-items:center;}
+  .folder-acts button{background:none; border:none; padding:4px 0; font-size:12px; font-weight:600; color:var(--ink); cursor:pointer; white-space:nowrap;}
+  .folder-acts button.warn{color:#E0453C;}
   .repo-acts{display:flex;}
   .repo-acts button{flex:1; background:none; border:none; padding:4px 0; font-size:12.5px; font-weight:600; color:var(--ink); cursor:pointer;}
   .repo-acts button.warn{color:#E0453C;}
@@ -2955,27 +2958,48 @@ async function repoRemove(ids){
     if(u){ URL.revokeObjectURL(u); repoBlobUrls.delete(id); }
   });
 }
-async function repoAddFolder(name){
-  const f = { id: uid()+Date.now().toString(36), name: String(name||'').trim().slice(0,20), createdAt: Date.now() };
+async function repoAddFolder(name, auto){
+  // auto=true 表示这个夹子是下载/导入时按作品名或文件名自动建的。
+  // 文件夹两个 tab 共用，自动建的夹子如果两边都常驻，「我的整理」那边
+  // 会冒出一堆 0 张的作品名夹子。所以标记一下，只在有内容的那一边显示。
+  const f = { id: uid()+Date.now().toString(36), name: String(name||'').trim().slice(0,20),
+              createdAt: Date.now(), auto: !!auto };
   if(!f.name) return null;
   await repoTx(['folders'], 'readwrite', tx=>tx.objectStore('folders').put(f));
   repoFolders.push(f);
   return f;
 }
-// 删文件夹不删里面的图，只是把它们退回"未分类"——
-// 手滑删掉一个夹子就连图一起没了，那太吓人了
-async function repoRemoveFolder(fid){
+// 同名的夹子只留一个：同一个包下载两次、同一个文件导两次，
+// 都该落进同一个夹子，而不是建出「猫猫」「猫猫」两个一模一样的
+async function repoFindOrCreateFolder(name, auto){
+  const n = String(name||'').trim().slice(0,20);
+  if(!n) return null;
+  const hit = repoFolders.find(f=>f.name === n);
+  return hit || await repoAddFolder(n, auto);
+}
+// 删文件夹。alsoItems=false 只删夹子、图退回未分类；true 连图一起删。
+// 两条路都留着：夹子建错了名字跟"这一整包我不要了"是两件事，
+// 只给其中一种，用户就得先手动搬空或者一张张删。
+async function repoRemoveFolder(fid, alsoItems){
   const inside = repoItems.filter(it=>it.folder===fid).map(it=>it.id);
-  await repoTx(['folders','items'], 'readwrite', tx=>{
+  await repoTx(['folders','items','blobs'], 'readwrite', tx=>{
     tx.objectStore('folders').delete(fid);
-    const s = tx.objectStore('items');
+    const s = tx.objectStore('items'), bs = tx.objectStore('blobs');
     inside.forEach(id=>{
+      if(alsoItems){ s.delete(id); bs.delete(id); return; }
       const r = s.get(id);
       r.onsuccess = ()=>{ const it = r.result; if(it){ it.folder=''; s.put(it); } };
     });
   });
   repoFolders = repoFolders.filter(f=>f.id!==fid);
-  repoItems.forEach(it=>{ if(it.folder===fid) it.folder=''; });
+  if(alsoItems){
+    const gone = new Set(inside);
+    repoItems = repoItems.filter(it=>!gone.has(it.id));
+    gone.forEach(id=>{ const u = repoBlobUrls.get(id); if(u){ URL.revokeObjectURL(u); repoBlobUrls.delete(id); } });
+  } else {
+    repoItems.forEach(it=>{ if(it.folder===fid) it.folder=''; });
+  }
+  return inside.length;
 }
 
 
@@ -2994,7 +3018,11 @@ let repoPicked = new Set();
 // 存的是这次勾选的那些图，带上当时选定的描述和来自哪个作品。
 async function saveDownloadToRepo(c, chosen, descOf){
   if(!repoReady) return;
+  // 按作品名开一个夹子，而不是全堆进未分类 —— 下载十个包之后，
+  // 未分类里几百张混在一起，等于没整理
+  const folder = await repoFindOrCreateFolder(c.title, true);
   const rows = chosen.map(e=>({
+    folder: folder ? folder.id : '',
     source:'site', url:e.url, desc: descOf(e) || '',
     fromTitle: c.title || '', fromAuthor: c.author || '',
     fromCategory: c.category || '',
@@ -3192,7 +3220,10 @@ function repoFolderTiles(){
   // 空文件夹也列出来。藏起来的话，刚建完一个夹子它就凭空消失了，
   // 只能靠"移动"才能想起它还在
   repoFolders.forEach(f=>{
-    tiles.push({ id:f.id, name:f.name, items: tabItems.filter(it=>it.folder===f.id) });
+    const inF = tabItems.filter(it=>it.folder===f.id);
+    // 自动建的夹子（作品名/文件名）只在有内容的那一边露面；
+    // 手动建的空夹子要一直在，否则刚建完就凭空消失
+    if(inF.length || !f.auto) tiles.push({ id:f.id, name:f.name, items: inF });
   });
   return tiles;
 }
@@ -3249,13 +3280,17 @@ function openRepoFolderSheet(){
           <input class="field-input" id="rfName" style="flex:1;" maxlength="20" placeholder="给夹子起个名字" value="${esc(name)}">
           <button class="btn-solid" id="rfAdd" style="width:auto; flex:0 0 auto; padding:0 16px;">新建</button>
         </div>
-        ${repoFolders.length ? `<div class="field-label">已有的</div><div class="row-list">${repoFolders.map(f=>`
-          <div class="row-item">
+        ${repoFolders.length ? `<div class="field-label">已有的</div><div class="row-list">${repoFolders.map(f=>{
+          const n = repoItems.filter(x=>x.folder===f.id).length;
+          return `<div class="row-item">
             <div class="row-main"><div style="font-size:13px;">${esc(f.name)}</div>
-              <div style="font-size:11px; color:var(--text-dim); margin-top:2px;">${repoItems.filter(x=>x.folder===f.id).length} 张</div></div>
-            <button class="icon-btn" data-del="${esc(f.id)}" aria-label="删除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="M6 7l1 13h10l1-13"/></svg></button>
-          </div>`).join('')}</div>
-          <p class="field-help">删掉文件夹不会删里面的图，它们会回到「未分类」。</p>` : ''}
+              <div style="font-size:11px; color:var(--text-dim); margin-top:2px;">${n} 张${f.auto?' · 自动建的':''}</div></div>
+            <div class="folder-acts">
+              ${n ? `<button data-keep="${esc(f.id)}">仅删夹子</button>` : ''}
+              <button class="warn" data-wipe="${esc(f.id)}">${n?'连图一起删':'删除'}</button>
+            </div>
+          </div>`;}).join('')}</div>
+          <p class="field-help"><b>仅删夹子</b>：图片留着，退回「未分类」。<b>连图一起删</b>：夹子和里面的图一起没，无法恢复。</p>` : ''}
       </div>`;
     $('rfClose').addEventListener('click', ()=>$('repoSheetMask').classList.remove('open'));
     $('rfName').addEventListener('input', e=>{ name = e.target.value; });
@@ -3265,11 +3300,32 @@ function openRepoFolderSheet(){
       if(!f){ showToast('先起个名字'); return; }
       name = ''; showToast('已新建'); draw(); renderRepo();
     });
-    $('repoSheetBox').querySelectorAll('[data-del]').forEach(b=>{
+    // 删的正好是当前正在看的那个夹子，就退回「全部」，
+    // 否则会停在一个已经不存在的地方
+    const afterFolderGone = fid => {
+      if(repoFolderFilter === fid) repoFolderFilter = 'all';
+      draw(); renderRepo();
+    };
+    $('repoSheetBox').querySelectorAll('[data-keep]').forEach(b=>{
       b.addEventListener('click', async ()=>{
-        await repoRemoveFolder(b.dataset.del);
-        if(repoFolderFilter === b.dataset.del) repoFolderFilter = 'all';
-        showToast('已删除'); draw(); renderRepo();
+        const n = await repoRemoveFolder(b.dataset.keep, false);
+        showToast(`已删除夹子，${n} 张退回未分类`); afterFolderGone(b.dataset.keep);
+      });
+    });
+    $('repoSheetBox').querySelectorAll('[data-wipe]').forEach(b=>{
+      b.addEventListener('click', async ()=>{
+        const fid = b.dataset.wipe;
+        const f = repoFolders.find(x=>x.id===fid);
+        const n = repoItems.filter(x=>x.folder===fid).length;
+        if(!n){   // 空夹子没什么好确认的
+          await repoRemoveFolder(fid, true);
+          showToast('已删除'); afterFolderGone(fid); return;
+        }
+        openConfirmSheet('连图一起删？', `「${f?f.name:''}」和里面的 ${n} 张会一起删掉，本地图片也会清除，无法恢复。`,
+          '删除', async ()=>{
+            await repoRemoveFolder(fid, true);
+            showToast(`已删除 ${n} 张`); afterFolderGone(fid);
+          });
       });
     });
   }
@@ -3352,22 +3408,38 @@ function openRepoAddSheet(){
       text = (el.value.trim() ? el.value.replace(/\s*$/,'') + '\n' : '') + got;
       el.value = text;
       const n = got.split('\n').filter(l=>l.trim()).length;
-      showToast(`已读入 ${n} 行`);
+      // 文件本身就带着名字，拿它当夹子名 —— 导进来的一整包本来就是一组，
+      // 全丢进未分类等于白导。已经有同名夹子就直接用那个。
+      const fname = f.name.replace(/\.[^.]+$/,'').trim();
+      const folder = await repoFindOrCreateFolder(fname, true);
+      if(folder){ addFolder = folder.id; redrawFolderChips(); }
+      showToast(folder ? `已读入 ${n} 行，将存进「${folder.name}」` : `已读入 ${n} 行`);
     }catch(err){
       showToast('读取失败：'+(err && err.message ? err.message : '这个文件读不出来'));
     }
   });
+  // 只重画夹子那一行。整块重画会把上面已经读进来的链接全冲掉
+  function redrawFolderChips(){
+    const wrap = $('raFolderChips');
+    if(!wrap) return;
+    wrap.innerHTML = `<button class="chip ${addFolder===''?'active':''}" data-to="">未分类</button>`
+      + repoFolders.map(f=>`<button class="chip ${addFolder===f.id?'active':''}" data-to="${esc(f.id)}">${esc(f.name)}</button>`).join('');
+    bindFolderChips();
+  }
+  function bindFolderChips(){
+    $('repoSheetBox').querySelectorAll('#raFolderChips [data-to]').forEach(b=>{
+      b.addEventListener('click', ()=>{
+        addFolder = b.dataset.to;
+        $('repoSheetBox').querySelectorAll('#raFolderChips .chip').forEach(c=>c.classList.remove('active'));
+        b.classList.add('active');
+      });
+    });
+  }
   // 点一下就填进输入框，不重画整块面板 —— 重画会把上面正在打的链接冲掉
   $('repoSheetBox').querySelectorAll('[data-origin]').forEach(b=>{
     b.addEventListener('click', ()=>{ const el=$('raOrigin'); if(el) el.value = b.dataset.origin; });
   });
-  $('repoSheetBox').querySelectorAll('#raFolderChips [data-to]').forEach(b=>{
-    b.addEventListener('click', ()=>{
-      addFolder = b.dataset.to;
-      $('repoSheetBox').querySelectorAll('#raFolderChips .chip').forEach(c=>c.classList.remove('active'));
-      b.classList.add('active');
-    });
-  });
+  bindFolderChips();
   $('raAddUrl').addEventListener('click', async ()=>{
     const el = $('raText'); text = el ? el.value : text;
     const originVal = ($('raOrigin')?.value || '').trim();
