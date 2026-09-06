@@ -3033,6 +3033,36 @@ let repoFolderFilter = 'all';   // 分类：'all' | 'none' | folderId
 let repoOpenPack = null;        // 文件夹：null = 还在文件夹列表这一层；'' = 零散图片
 let repoPickMode = false;
 let repoPicked = new Set();
+// 文件夹这一层也能多选：长按任意一个进入，之后点选。选中的是文件夹名。
+let repoPackPickMode = false;
+let repoPackPicked = new Set();
+
+// 当前选中的条目。两层共用同一套操作（移动/导出/上传/删除），
+// 区别只在"选的是图还是整个文件夹"，在这里统一摊平成条目列表。
+function repoSelectedItems(){
+  if(repoPackPickMode){
+    const out = [];
+    repoPackPicked.forEach(pk=>{ out.push(...repoPackItems(repoFolderFilter, pk)); });
+    return out;
+  }
+  return repoItems.filter(it=>repoPicked.has(it.id));
+}
+function repoAnyPickMode(){ return repoPickMode || repoPackPickMode; }
+function repoExitPick(){ repoPickMode=false; repoPicked=new Set(); repoPackPickMode=false; repoPackPicked=new Set(); }
+// 给格子挂长按：按住 450ms 进多选，跟首页卡片长按预览用的是同一套时长和
+// "长按之后把随之而来的 click 吞掉"的写法
+function bindLongPress(el, onLong, onTap){
+  let timer = null, longPressed = false;
+  el.addEventListener('click', ()=>{ if(longPressed){ longPressed=false; return; } onTap(); });
+  el.addEventListener('pointerdown', ()=>{
+    longPressed = false;
+    timer = setTimeout(()=>{ longPressed = true; onLong(); }, 450);
+  });
+  const cancel = ()=>clearTimeout(timer);
+  el.addEventListener('pointerup', cancel);
+  el.addEventListener('pointerleave', cancel);
+  el.addEventListener('pointercancel', cancel);
+}
 
 function openRepoPage(){
   repoOpenPack = null; repoPickMode = false; repoPicked = new Set();
@@ -3041,8 +3071,9 @@ function openRepoPage(){
 }
 $('openRepoBtn').addEventListener('click', openRepoPage);
 $('repoBackBtn').addEventListener('click', ()=>{
-  // 打开着某个文件夹时，返回先退回文件夹列表，而不是直接关掉整页
-  if(repoOpenPack !== null){ repoOpenPack = null; repoPickMode=false; repoPicked=new Set(); renderRepo(); return; }
+  // 一层层往回退：多选 -> 文件夹列表 -> 关掉整页
+  if(repoAnyPickMode()){ repoExitPick(); renderRepo(); return; }
+  if(repoOpenPack !== null){ repoOpenPack = null; renderRepo(); return; }
   $('repoOverlay').classList.remove('open');
 });
 // 能不能一键上传：站内下载的不行（那是别人的作品），
@@ -3131,7 +3162,7 @@ function renderRepo(){
   const browsingPacks = repoOpenPack === null;   // 还在文件夹这一层
   const items = repoVisibleItems();
 
-  head.innerHTML = repoPickMode
+  head.innerHTML = repoAnyPickMode()
     ? `<button class="icon-btn" id="repoDoneBtn" style="width:auto; padding:0 6px; font-size:13px; font-weight:600;">完成</button>`
     : `<button class="icon-btn" id="repoAddBtn" aria-label="添加"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg></button>
        <button class="icon-btn" id="repoSettingsBtn" aria-label="设置"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>`;
@@ -3172,7 +3203,10 @@ function renderRepo(){
     <div class="repo-line">
       <span>${inTab} 张${otherTab?`，另有 ${otherTab} 张在${repoTab==='site'?'我的整理':'站内下载'}`:''}</span>
       <span class="grow"></span>
-      ${(!browsingPacks && items.length) ? `<button id="repoPickBtn">${repoPickMode?`已选 ${repoPicked.size}`:'选择'}</button>` : ''}
+      ${browsingPacks
+          ? (repoPackTiles(repoFolderFilter).length
+              ? `<button id="repoPackPickBtn">${repoPackPickMode?`已选 ${repoPackPicked.size} 个文件夹`:'选择'}</button>` : '')
+          : (items.length ? `<button id="repoPickBtn">${repoPickMode?`已选 ${repoPicked.size}`:'选择'}</button>` : '')}
     </div>
     <div class="chip-row repo-chips">
       ${chips.map(f=>`<button class="chip ${repoFolderFilter===f.id?'active':''}" data-folder="${esc(f.id)}">${esc(f.name)}</button>`).join('')}
@@ -3181,21 +3215,27 @@ function renderRepo(){
     ${mainHtml}
     <div style="height:12px;"></div>`;
 
-  foot.hidden = !repoPickMode;
-  if(repoPickMode){
-    const n = repoPicked.size;
+  foot.hidden = !repoAnyPickMode();
+  if(repoAnyPickMode()){
+    const packTiles = repoPackTiles(repoFolderFilter);
+    const n = repoPackPickMode ? repoPackPicked.size : repoPicked.size;
+    const total = repoPackPickMode ? packTiles.length : items.length;
     // 站内下载这一栏不放「上传」：那里的内容一律不能再发布，
     // 放一个按下必然被拒绝的按钮没有意义
     foot.innerHTML = `<div class="repo-acts">
-      <button id="repoPickAllBtn">${n && n===items.length ? '取消全选' : '全选'}</button>
+      <button id="repoPickAllBtn">${n && n===total ? '取消全选' : '全选'}</button>
       <button id="repoMoveBtn" ${n?'':'disabled'}>移动</button>
       <button id="repoExportBtn" ${n?'':'disabled'}>导出</button>
       ${repoTab==='mine' ? `<button id="repoPublishBtn" ${n?'':'disabled'}>上传</button>` : ''}
       <button id="repoDeleteBtn" class="warn" ${n?'':'disabled'}>删除</button>
     </div>`;
-    $('repoDoneBtn').addEventListener('click', ()=>{ repoPickMode=false; repoPicked=new Set(); renderRepo(); });
+    $('repoDoneBtn').addEventListener('click', ()=>{ repoExitPick(); renderRepo(); });
     $('repoPickAllBtn').addEventListener('click', ()=>{
-      repoPicked = repoPicked.size===items.length ? new Set() : new Set(items.map(x=>x.id));
+      if(repoPackPickMode){
+        repoPackPicked = repoPackPicked.size===packTiles.length ? new Set() : new Set(packTiles.map(t=>t.pack));
+      } else {
+        repoPicked = repoPicked.size===items.length ? new Set() : new Set(items.map(x=>x.id));
+      }
       renderRepo();
     });
     $('repoMoveBtn').addEventListener('click', openRepoMoveSheet);
@@ -3208,38 +3248,43 @@ function renderRepo(){
     $('repoSettingsBtn').addEventListener('click', openRepoSettingsSheet);
   }
   const pick = $('repoPickBtn');
-  if(pick) pick.addEventListener('click', ()=>{ repoPickMode=!repoPickMode; repoPicked=new Set(); renderRepo(); });
+  if(pick) pick.addEventListener('click', ()=>{ repoExitPick(); repoPickMode=true; renderRepo(); });
+  const packPick = $('repoPackPickBtn');
+  if(packPick) packPick.addEventListener('click', ()=>{ repoExitPick(); repoPackPickMode=true; renderRepo(); });
 
   body.querySelectorAll('[data-tab]').forEach(b=>b.addEventListener('click', ()=>{
     if(repoTab === b.dataset.tab) return;
     repoTab = b.dataset.tab; repoFolderFilter = 'all'; repoOpenPack = null;
-    repoPickMode = false; repoPicked = new Set();
+    repoExitPick();
     renderRepo();
   }));
   body.querySelectorAll('[data-folder]').forEach(b=>b.addEventListener('click', ()=>{
     if(repoFolderFilter === b.dataset.folder && repoOpenPack === null) return;
     // 换分类要退回文件夹这一层，并清掉选择 —— 选中的东西已经不在眼前了
     repoFolderFilter = b.dataset.folder; repoOpenPack = null;
-    repoPickMode = false; repoPicked = new Set();
+    repoExitPick();
     renderRepo();
   }));
   const crumb = $('repoPackCrumb');
   if(crumb) crumb.addEventListener('click', ()=>{
-    repoOpenPack = null; repoPickMode=false; repoPicked=new Set(); renderRepo();
+    repoOpenPack = null; repoExitPick(); renderRepo();
   });
   $('repoNewFolderBtn').addEventListener('click', openRepoFolderSheet);
   body.querySelectorAll('.repo-cell').forEach(cell=>{
-    cell.addEventListener('click', ()=>{
-      if(cell.dataset.openpack !== undefined){
-        repoOpenPack = cell.dataset.openpack; renderRepo(); return;
-      }
-      const it = repoItems.find(x=>x.id===cell.dataset.id);
-      if(!it) return;
-      if(repoPickMode){
-        repoPicked.has(it.id) ? repoPicked.delete(it.id) : repoPicked.add(it.id);
-        renderRepo();
-      } else openRepoItemSheet(it);
-    });
+    if(cell.dataset.openpack !== undefined){
+      const pk = cell.dataset.openpack;
+      const toggle = ()=>{ repoPackPicked.has(pk) ? repoPackPicked.delete(pk) : repoPackPicked.add(pk); renderRepo(); };
+      bindLongPress(cell,
+        ()=>{ if(!repoPackPickMode){ repoExitPick(); repoPackPickMode = true; } repoPackPicked.add(pk); renderRepo(); },
+        ()=>{ if(repoPackPickMode) toggle(); else { repoOpenPack = pk; renderRepo(); } });
+      return;
+    }
+    const it = repoItems.find(x=>x.id===cell.dataset.id);
+    if(!it) return;
+    const toggle = ()=>{ repoPicked.has(it.id) ? repoPicked.delete(it.id) : repoPicked.add(it.id); renderRepo(); };
+    bindLongPress(cell,
+      ()=>{ if(!repoPickMode){ repoExitPick(); repoPickMode = true; } repoPicked.add(it.id); renderRepo(); },
+      ()=>{ if(repoPickMode) toggle(); else openRepoItemSheet(it); });
   });
   fillRepoBlobs(body);
   const cnt = $('repoEntryCount');
@@ -3272,10 +3317,12 @@ function repoFolderCoverHtml(items){
   return `<div class="repo-folder-cover">${inner}</div>`;
 }
 function repoPackTileHtml(t){
-  return `<div class="repo-cell" data-openpack="${esc(t.pack)}">
+  const picked = repoPackPicked.has(t.pack);
+  return `<div class="repo-cell${picked?' sel':''}" data-openpack="${esc(t.pack)}">
     <div class="ph">
       ${repoFolderCoverHtml(t.items)}
       <div class="repo-folder-badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg></div>
+      ${repoPackPickMode ? `<div class="pick ${picked?'on':''}">${picked?'<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>':''}</div>` : ''}
     </div>
     <div class="cap">${esc(t.name)} · ${t.items.length} 张</div>
   </div>`;
@@ -3361,10 +3408,12 @@ function openRepoFolderSheet(){
   }
 }
 function openRepoMoveSheet(){
-  if(!repoPicked.size){ showToast('请先选择内容'); return; }
+  const picked = repoSelectedItems();
+  if(!picked.length){ showToast('请先选择内容'); return; }
+  const label = repoPackPickMode ? `${repoPackPicked.size} 个文件夹` : `${picked.length} 张`;
   $('repoSheetMask').classList.add('open');
   $('repoSheetBox').innerHTML = `
-    <div class="sheet-head"><span class="t">移到哪个分类（${repoPicked.size} 张）</span><button class="icon-btn" id="rmClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button></div>
+    <div class="sheet-head"><span class="t">移到哪个分类（${label}）</span><button class="icon-btn" id="rmClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button></div>
     <div class="sheet-scroll">
       <div class="chip-row">
         <button class="chip" data-to="">未分类</button>
@@ -3375,9 +3424,9 @@ function openRepoMoveSheet(){
   $('rmClose').addEventListener('click', ()=>$('repoSheetMask').classList.remove('open'));
   $('repoSheetBox').querySelectorAll('[data-to]').forEach(b=>{
     b.addEventListener('click', async ()=>{
-      for(const id of repoPicked) await repoUpdate(id, { folder: b.dataset.to });
+      for(const it of picked) await repoUpdate(it.id, { folder: b.dataset.to });
       $('repoSheetMask').classList.remove('open');
-      showToast('已移动'); repoPicked = new Set(); renderRepo();
+      showToast('已移动'); repoExitPick(); renderRepo();
     });
   });
 }
@@ -3577,7 +3626,7 @@ function openRepoItemSheet(it){
 
 /* ---- 批量：导出 / 上传 / 删除 ---- */
 function repoExportPicked(){
-  const picked = repoItems.filter(it=>repoPicked.has(it.id));
+  const picked = repoSelectedItems();
   if(!picked.length){ showToast('请先选择内容'); return; }
   const withUrl = picked.filter(it=>(it.url||'').trim());
   if(!withUrl.length){ showToast('选中的均为本地图片，没有可导出的链接'); return; }
@@ -3597,11 +3646,13 @@ function repoExportPicked(){
 }
 
 function repoDeletePicked(){
-  if(!repoPicked.size){ showToast('请先选择内容'); return; }
-  const n = repoPicked.size;
-  openConfirmSheet('从仓库删除？', `将删除 ${n} 张，本地缓存的图片一并清除，无法恢复。`, '删除', async ()=>{
-    await repoRemove(Array.from(repoPicked));
-    repoPicked = new Set(); showToast('已删除'); renderRepo();
+  const picked = repoSelectedItems();
+  if(!picked.length){ showToast('请先选择内容'); return; }
+  const n = picked.length;
+  const what = repoPackPickMode ? `${repoPackPicked.size} 个文件夹（共 ${n} 张）` : `${n} 张`;
+  openConfirmSheet('从仓库删除？', `将删除 ${what}，本地缓存的图片一并清除，无法恢复。`, '删除', async ()=>{
+    await repoRemove(picked.map(it=>it.id));
+    repoExitPick(); showToast('已删除'); renderRepo();
   });
 }
 
@@ -3609,7 +3660,7 @@ function repoDeletePicked(){
 //   1. 站内下载的和本地图片直接筛掉 —— 前者是别人的作品，后者发出去别人取不到图
 //   2. 剩下的还要你自己确认一遍这确实是你整理的内容
 function repoPublishPicked(){
-  const picked = repoItems.filter(it=>repoPicked.has(it.id));
+  const picked = repoSelectedItems();
   if(!picked.length){ showToast('请先选择内容'); return; }
   const ok = picked.filter(repoCanPublish);
   const fromSite = picked.filter(it=>it.source==='site').length;
@@ -3642,7 +3693,7 @@ function repoPublishPicked(){
       pubNeedsDesc = false; renderNeedsDescCheck();
       batchMode = false; batchSelected = new Set();
       updateEditingBanner(); renderPubItems();
-      repoPickMode = false; repoPicked = new Set();
+      repoExitPick();
       $('repoSheetMask').classList.remove('open');
       $('repoOverlay').classList.remove('open');
       showPage('publish');
