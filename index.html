@@ -1542,17 +1542,29 @@ async function deleteCollectionRemote(id){
 // 第二个参数原来是布尔的 isFont。现在有三类内容，扩成"哪一类"：
 // true / 'font' -> 字体，'post' -> 其他，省略 -> 表情包。
 // true 和省略这两种老写法保持能用，现有调用点一个都不用改。
-function likeCol(kind){
-  return (kind === true || kind === 'font') ? 'font_id' : kind === 'post' ? 'post_id' : 'collection_id';
+// 点赞的目标有三种：表情包 / 字体 / 其他。这个参数历史上叫 isFont，
+// 传的却是 true | 'font' | 'post' | undefined 四种值 —— 下面几处写成 if(isFont)
+// 就出事了：'post' 是个非空字符串，恒为真，于是"其他"的点赞全都拐进了字体那一支，
+// 在 fonts 里找一个 post 的 id，永远找不到。后果是点赞数不动、作者收不到提醒。
+// 统一从这里归一化一次，别再让调用方各判各的。
+function likeKind(kind){
+  return (kind === true || kind === 'font') ? 'font' : kind === 'post' ? 'post' : 'collection';
 }
-function bumpLikeCount(id, isFont, delta){
-  if(isFont){
-    const f = fonts.find(x=>x.id===id);
-    if(f) f.like_count = Math.max(0, (f.like_count||0) + delta);
-  } else {
-    const c = collections.find(x=>x.id===id);
-    if(c) c.likeCount = Math.max(0, (c.likeCount||0) + delta);
-  }
+function likeTarget(id, kind){
+  const k = likeKind(kind);
+  const list = k === 'font' ? fonts : k === 'post' ? posts : collections;
+  return (list || []).find(x=>x.id===id) || null;
+}
+function likeCol(kind){
+  const k = likeKind(kind);
+  return k === 'font' ? 'font_id' : k === 'post' ? 'post_id' : 'collection_id';
+}
+function bumpLikeCount(id, kind, delta){
+  const t = likeTarget(id, kind);
+  if(!t) return;
+  // 表情包在前端映射成了 likeCount，字体和其他直接用库里的 like_count
+  if(likeKind(kind) === 'collection') t.likeCount  = Math.max(0, (t.likeCount||0)  + delta);
+  else                                t.like_count = Math.max(0, (t.like_count||0) + delta);
 }
 async function toggleLikeRemote(id, isFont){
   const col = likeCol(isFont);
@@ -1570,11 +1582,13 @@ async function toggleLikeRemote(id, isFont){
 // 点赞提醒：只在"点赞"（不是取消点赞）且不是给自己的作品点赞时写一条通知。
 // notifications 表需要另外在 Supabase 里建（见仓库里的 sql/notifications.sql），
 // 这里失败了就静默跳过，不能因为提醒写不进去就让点赞本身报错。
-async function notifyLike(id, isFont){
-  const ownerId = isFont ? (fonts.find(x=>x.id===id)||{}).user_id : (collections.find(x=>x.id===id)||{}).authorId;
+async function notifyLike(id, kind){
+  const t = likeTarget(id, kind);
+  // 表情包的作者字段在前端叫 authorId，字体和其他叫 user_id
+  const ownerId = t && (t.authorId || t.user_id);
   if(!ownerId || ownerId===currentUserId) return;
   const payload = { recipient_id: ownerId, actor_id: currentUserId, actor_nickname: currentUser, type:'like' };
-  payload[likeCol(isFont)] = id;
+  payload[likeCol(kind)] = id;
   const { error } = await sb.from('notifications').insert(payload);
   if(error) console.warn('写点赞提醒失败（可能还没建 notifications 表，见 sql/notifications.sql）：', error.message);
 }
@@ -1613,6 +1627,7 @@ function renderNotifBadge(){
 function notifTargetTitle(n){
   if(n.collection_id){ const c = collections.find(x=>x.id===n.collection_id); return c ? c.title : '一个表情包'; }
   if(n.font_id){ const f = fonts.find(x=>x.id===n.font_id); return f ? f.name : '一个字体'; }
+  if(n.post_id){ const pt = (posts||[]).find(x=>x.id===n.post_id); return pt ? pt.title : '一条内容'; }
   return '你的作品';
 }
 function timeAgo(ts){
@@ -1628,7 +1643,7 @@ function renderNotifSheet(){
     <div class="sheet-head"><span class="t">通知</span><button class="icon-btn" id="notifCloseBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button></div>
     <div class="sheet-scroll">
       ${notifications.length ? `<div class="row-list">${notifications.map(n=>`
-        <div class="row-item" data-notif-collection="${esc(n.collection_id||'')}" data-notif-font="${esc(n.font_id||'')}" style="cursor:pointer;">
+        <div class="row-item" data-notif-collection="${esc(n.collection_id||'')}" data-notif-font="${esc(n.font_id||'')}" data-notif-post="${esc(n.post_id||'')}" style="cursor:pointer;">
           <div class="row-main">
             <div style="font-size:13px;">❤️ ${authorLinkHtml(n.actor_id, n.actor_nickname||'有人')} 点赞了你的《${esc(notifTargetTitle(n))}》</div>
             <div style="font-size:11px; color:var(--text-dim); margin-top:2px;">${timeAgo(n.created_at)}</div>
@@ -1637,12 +1652,12 @@ function renderNotifSheet(){
     </div>
   `;
   $('notifCloseBtn').addEventListener('click', ()=>$('notifSheetMask').classList.remove('open'));
-  $('notifSheetBox').querySelectorAll('[data-notif-collection], [data-notif-font]').forEach(el=>{
+  $('notifSheetBox').querySelectorAll('[data-notif-collection], [data-notif-font], [data-notif-post]').forEach(el=>{
     el.addEventListener('click', (e)=>{
       if(e.target.closest('.author-link')) return;
-      const cid = el.dataset.notifCollection, fid = el.dataset.notifFont;
+      const cid = el.dataset.notifCollection, fid = el.dataset.notifFont, pid = el.dataset.notifPost;
       $('notifSheetMask').classList.remove('open');
-      if(cid) openDetail(cid); else if(fid) openFontDetail(fid);
+      if(cid) openDetail(cid); else if(fid) openFontDetail(fid); else if(pid) openPostDetail(pid);
     });
   });
 }
