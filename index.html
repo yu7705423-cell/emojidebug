@@ -2912,7 +2912,7 @@ async function repoAdd(rows){
     if(r.url) seen.add(key);
     fresh.push(Object.assign({
       id: uid()+Date.now().toString(36), source:'mine', url:'', desc:'', folder:'', origin:'',
-      hasBlob:false, addedAt: Date.now(), fromTitle:'', fromAuthor:'',
+      hasBlob:false, addedAt: Date.now(), fromTitle:'', fromAuthor:'', fromCategory:'', fromTags:[],
     }, r));
   }
   if(!fresh.length) return [];
@@ -2997,6 +2997,10 @@ async function saveDownloadToRepo(c, chosen, descOf){
   const rows = chosen.map(e=>({
     source:'site', url:e.url, desc: descOf(e) || '',
     fromTitle: c.title || '', fromAuthor: c.author || '',
+    fromCategory: c.category || '',
+    fromTags: asArray(c.tags).map(t=>String(t==null?'':t).trim()).filter(Boolean),
+    // 来源：这张图自己标了就用它的，没标才退回整个作品的
+    origin: (e.source || c.source || '').trim(),
   }));
   const fresh = await repoAdd(rows);
   if(!fresh.length) return;
@@ -3164,6 +3168,8 @@ function renderRepo(){
 function repoCellHtml(it){
   const picked = repoPicked.has(it.id);
   // 来源已经由上面的大 tab 表达了，格子上不用再标一遍
+  // 来源已经由上面的大 tab 表达了，格子上不用再标一遍；
+  // 站内的没写描述时退回作品名，至少知道它是哪个包里的
   const cap = esc(it.desc || (it.source==='site' ? (it.fromTitle||'未命名') : '未命名'));
   return `<div class="repo-cell${picked?' sel':''}" data-id="${esc(it.id)}">
     <div class="ph">
@@ -3309,8 +3315,21 @@ function openRepoAddSheet(){
         repoKnownOrigins().map(o=>`<button class="chip" data-origin="${esc(o)}">${esc(o)}</button>`).join('')}</div>` : ''}
       <p class="field-help">填了的话，一键上传时会一起带到发布页的「来源」里。</p>
       <div class="field-label" style="margin-top:14px;">粘贴链接</div>
-      <div class="composer"><textarea class="field" id="raText" placeholder="每行一条，可以带描述：&#10;笑死：https://example.com/a.png&#10;https://example.com/b.png" style="min-height:120px;"></textarea></div>
-      <p class="field-help">格式跟发布页的导入一样，「描述+分隔符+链接」或者只有链接都行。</p>
+      <div class="composer">
+        <textarea class="field" id="raText" placeholder="每行一条，可以带描述：&#10;笑死：https://example.com/a.png&#10;https://example.com/b.png" style="min-height:120px;"></textarea>
+        <div class="composer-actions">
+          <button class="txt-btn" id="raUploadBtn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v12"/><path d="M7 8l5-5 5 5"/><path d="M5 21h14"/></svg>
+            上传 txt / docx
+          </button>
+          <button class="txt-btn" id="raClearBtn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 7h12"/><path d="M9 7V4h6v3"/><path d="M7 7l1 13h8l1-13"/></svg>
+            清空
+          </button>
+        </div>
+      </div>
+      <input type="file" id="raDocFile" accept=".txt,.docx">
+      <p class="field-help">格式跟发布页的导入一样，「描述+分隔符+链接」或者只有链接都行。txt / docx 会读成文字追加到上面，可以先改再加。</p>
       <div class="btn-row"><button class="btn-solid" id="raAddUrl">加进仓库</button></div>
       <div class="field-label">或者从相册选图</div>
       <p class="field-help">图片直接存在你自己手机的浏览器里，不会上传。<b>本地图片不能一键上传发布</b>，要发布得先传图床拿到链接。</p>
@@ -3319,6 +3338,25 @@ function openRepoAddSheet(){
     </div>`;
   $('raClose').addEventListener('click', ()=>$('repoSheetMask').classList.remove('open'));
   $('raText').addEventListener('input', e=>{ text = e.target.value; });
+  // 读文件：docx 要先解包取正文，txt 直接读。读完追加而不是覆盖，
+  // 这样能一次导好几个文件，也不会把手打的几行冲掉。
+  $('raUploadBtn').addEventListener('click', ()=>$('raDocFile').click());
+  $('raClearBtn').addEventListener('click', ()=>{ text=''; $('raText').value=''; });
+  $('raDocFile').addEventListener('change', async e=>{
+    const f = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if(!f) return;
+    try{
+      const got = f.name.toLowerCase().endsWith('.docx') ? await readDocxText(f) : await f.text();
+      const el = $('raText');
+      text = (el.value.trim() ? el.value.replace(/\s*$/,'') + '\n' : '') + got;
+      el.value = text;
+      const n = got.split('\n').filter(l=>l.trim()).length;
+      showToast(`已读入 ${n} 行`);
+    }catch(err){
+      showToast('读取失败：'+(err && err.message ? err.message : '这个文件读不出来'));
+    }
+  });
   // 点一下就填进输入框，不重画整块面板 —— 重画会把上面正在打的链接冲掉
   $('repoSheetBox').querySelectorAll('[data-origin]').forEach(b=>{
     b.addEventListener('click', ()=>{ const el=$('raOrigin'); if(el) el.value = b.dataset.origin; });
@@ -3379,7 +3417,8 @@ function openRepoItemSheet(it){
         <div style="display:flex; justify-content:center; margin-bottom:12px;">
           <img id="riImg" src="${it.hasBlob?'':esc(it.url)}" alt="" referrerpolicy="no-referrer" style="max-width:160px; max-height:160px; border-radius:var(--radius-s);" onerror="this.style.opacity=0">
         </div>
-        ${it.fromTitle ? `<p class="hint" style="margin-top:0;">来自《${esc(it.fromTitle)}》${it.fromAuthor?` · ${esc(it.fromAuthor)}`:''}</p>` : ''}
+        ${it.fromTitle ? `<p class="hint" style="margin-top:0;">来自《${esc(it.fromTitle)}》${it.fromAuthor?` · ${esc(it.fromAuthor)}`:''}${it.fromCategory?` · ${esc(it.fromCategory)}`:''}</p>` : ''}
+        ${asArray(it.fromTags).length ? tagRowHtml(it.fromTags) : ''}
         <div class="field-label" style="margin-top:0;">描述</div>
         <input class="field-input" id="riDesc" maxlength="20" value="${esc(desc)}" placeholder="给它写个描述">
         <div class="field-label">来源（可选）</div>
@@ -3439,9 +3478,12 @@ function repoExportPicked(){
   const withUrl = picked.filter(it=>(it.url||'').trim());
   if(!withUrl.length){ showToast('选中的都是本地图片，没有链接可以导出'); return; }
   $('repoSheetMask').classList.add('open');
+  // 选中的这批里出现过的来源，汇总成一行放在正文前面 ——
+  // 跟站内下载导出的「来源：…」是同一个写法
+  const origins = Array.from(new Set(withUrl.map(it=>(it.origin||'').trim()).filter(Boolean)));
   renderFormatSheet('repoSheetBox', {
     rows: withUrl.map(it=>({ desc: it.desc || '', url: it.url })),
-    head: [],   // 自己的仓库，不带别人作品的使用权限声明
+    head: origins.length ? [`来源：${origins.join('、')}`] : [],   // 自己的仓库，不带别人作品的使用权限声明
     filename: `我的仓库_${withUrl.length}张`,
     onClose: ()=>$('repoSheetMask').classList.remove('open'),
   });
