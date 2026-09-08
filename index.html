@@ -58,7 +58,7 @@
   html,body{touch-action:manipulation; -webkit-text-size-adjust:100%;}
   button,input,textarea,select,a,.coll-card,.row-item,.chip,.sel-cell{touch-action:manipulation;}
   ::selection{background:var(--ink); color:var(--ink-contrast);}
-  :focus-visible{outline:2px solid var(--ink); outline-offset:2px;}
+  :focus-visible{outline:2px solid var(--ink-line, var(--ink)); outline-offset:2px;}
   @media (prefers-reduced-motion:reduce){ *{animation-duration:.001s !important; transition-duration:.001s !important;} }
   @media (pointer: coarse), (max-width:600px){ input, textarea, select{font-size:16px !important;} }
 
@@ -115,7 +115,7 @@
   .btn-outline{display:flex; align-items:center; justify-content:center; gap:8px; width:100%; background:transparent; border:1px solid var(--border); border-radius:var(--radius-s); padding:10px; font-size:12.5px; font-weight:600; cursor:pointer; transition:transform .12s ease, background .12s ease;}
   .btn-outline:hover{background:var(--bg-hover);}
   .btn-outline:active{transform:scale(.97);}
-  .btn-outline.active{background:var(--ink); color:var(--ink-contrast); border-color:var(--ink);}
+  .btn-outline.active{background:var(--ink); color:var(--ink-contrast); border-color:var(--ink-line, var(--ink));}
   .btn-row{display:flex; gap:8px; margin-top:8px;}
   .btn-row > *{flex:1;}
 
@@ -123,12 +123,12 @@
   .chip-row::-webkit-scrollbar{display:none;}
   .chip{flex:0 0 auto; border:1px solid var(--border); border-radius:999px; padding:7px 13px; font-size:12px; font-weight:600; background:transparent; color:var(--text-dim); cursor:pointer; white-space:nowrap; transition:transform .12s ease, background .15s ease, color .15s ease;}
   .chip:active{transform:scale(.94);}
-  .chip.active{background:var(--ink); color:var(--ink-contrast); border-color:var(--ink);}
+  .chip.active{background:var(--ink); color:var(--ink-contrast); border-color:var(--ink-line, var(--ink));}
 
   .field-label{font-size:11px; color:var(--text-dim); font-weight:600; margin:10px 0 5px;}
   .field-label:first-child{margin-top:0;}
   .field-input{width:100%; border:1px solid var(--border); border-radius:var(--radius-s); background:transparent; padding:9px 11px; font-size:13px; outline:none;}
-  .field-input:focus{border-color:var(--ink);}
+  .field-input:focus{border-color:var(--ink-line, var(--ink));}
   .field-help{font-size:11px; color:var(--text-dim); line-height:1.6; margin:6px 0 0;}
   .key-row{display:flex; gap:6px;}
   .key-row .field-input{flex:1;}
@@ -154,7 +154,7 @@
   .row-status{flex-shrink:0; width:14px; display:flex; align-items:center; justify-content:center; padding-top:12px;}
   .dot{width:6px; height:6px; border-radius:50%; background:var(--ink);}
   .dot.outline{background:transparent; border:1.3px solid var(--text-faint);}
-  .spin{width:12px; height:12px; border-radius:50%; border:1.4px solid var(--border); border-top-color:var(--ink); animation:spin .7s linear infinite;}
+  .spin{width:12px; height:12px; border-radius:50%; border:1.4px solid var(--border); border-top-color:var(--ink-line, var(--ink)); animation:spin .7s linear infinite;}
   @keyframes spin{to{transform:rotate(360deg);}}
   .row-del{flex-shrink:0; padding-top:12px; background:none; border:none; cursor:pointer; color:var(--text-faint);}
   .row-del svg{width:14px; height:14px;}
@@ -164,7 +164,7 @@
   .row-item.batch-selectable{cursor:pointer;}
   .row-item.batch-selectable input{pointer-events:none;}
   .sel-check-inline{flex-shrink:0; width:18px; height:18px; border-radius:4px; border:1px solid var(--border); display:flex; align-items:center; justify-content:center; margin-top:11px; cursor:pointer;}
-  .sel-check-inline.on{background:var(--ink); border-color:var(--ink);}
+  .sel-check-inline.on{background:var(--ink); border-color:var(--ink-line, var(--ink));}
   .sel-check-inline svg{width:11px; height:11px;}
   .empty-state{text-align:center; padding:44px 20px; color:var(--text-faint);}
   .empty-state svg{width:30px; height:30px; margin-bottom:10px; opacity:.5;}
@@ -257,7 +257,7 @@
   /* 我的仓库 */
   /* 「我的」页里只留一行入口，仓库本身是整页 —— 塞在个人页里控件叠控件，
      内容还没露头先看见一堵墙 */
-  .entry-row{display:flex; align-items:center; gap:10px; width:100%; margin-top:8px; padding:13px 14px; background:none; border:1px solid var(--border); border-radius:var(--radius-s); cursor:pointer; color:var(--ink); font-size:13.5px;}
+  .entry-row{display:flex; align-items:center; gap:10px; width:100%; margin-top:8px; padding:13px 14px; background:none; border:1px solid var(--border); border-radius:var(--radius-s); cursor:pointer; color:var(--ink-line, var(--ink)); font-size:13.5px;}
   .entry-row svg{width:17px; height:17px; flex-shrink:0;}
   .entry-row .t{flex:1; text-align:left; font-weight:600;}
   .entry-row .n{font-size:12px; color:var(--text-faint);}
@@ -267,7 +267,7 @@
   .repo-tabs{padding:14px 18px 0;}
   .repo-line{display:flex; align-items:center; gap:10px; padding:12px 18px 0; font-size:11.5px; color:var(--text-faint);}
   .repo-line .grow{flex:1;}
-  .repo-line button{background:none; border:none; padding:0; font-size:12px; font-weight:600; color:var(--ink); cursor:pointer;}
+  .repo-line button{background:none; border:none; padding:0; font-size:12px; font-weight:600; color:var(--ink-line, var(--ink)); cursor:pointer;}
   .repo-chips{padding:12px 18px 0;}
   /* 格子直接复用详情页那套：图在上、说明在下，不在图上压深色渐变 */
   .repo-cell{position:relative; min-width:0; cursor:pointer;}
@@ -278,21 +278,21 @@
   .repo-cell .pick{position:absolute; top:7px; right:7px; width:20px; height:20px; border-radius:50%; background:rgba(255,255,255,.92); box-shadow:0 1px 3px rgba(0,0,0,.22); display:flex; align-items:center; justify-content:center;}
   .repo-cell .pick.on{background:var(--ink);}
   .repo-cell .pick svg{width:11px; height:11px;}
-  .repo-cell.sel .ph{outline:2px solid var(--ink); outline-offset:-2px;}
+  .repo-cell.sel .ph{outline:2px solid var(--ink-line, var(--ink)); outline-offset:-2px;}
   .repo-empty{text-align:center; color:var(--text-faint); font-size:12.5px; padding:56px 24px; line-height:1.9;}
   /* 文件夹卡片：跟 .repo-cell 共用外层结构（.ph/.cap），封面换成 2x2 小拼图 */
   .repo-folder-cover{position:absolute; inset:0; display:grid; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr; gap:2px;}
   .repo-folder-cover .rfc-cell{position:relative; overflow:hidden; background:var(--bg-elev);}
   .repo-folder-cover .rfc-cell img{position:absolute; inset:0; width:100%; height:100%; object-fit:cover; display:block;}
-  .repo-folder-badge{position:absolute; top:7px; left:7px; width:22px; height:22px; border-radius:50%; background:rgba(255,255,255,.92); box-shadow:0 1px 3px rgba(0,0,0,.22); display:flex; align-items:center; justify-content:center; color:var(--ink);}
+  .repo-folder-badge{position:absolute; top:7px; left:7px; width:22px; height:22px; border-radius:50%; background:rgba(255,255,255,.92); box-shadow:0 1px 3px rgba(0,0,0,.22); display:flex; align-items:center; justify-content:center; color:var(--ink-line, var(--ink));}
   .repo-folder-badge svg{width:12px; height:12px;}
-  .repo-folder-crumb{padding:0 18px 4px; font-size:12px; font-weight:600; color:var(--ink); cursor:pointer; display:flex; align-items:center; gap:2px;}
+  .repo-folder-crumb{padding:0 18px 4px; font-size:12px; font-weight:600; color:var(--ink-line, var(--ink)); cursor:pointer; display:flex; align-items:center; gap:2px;}
   /* 选择模式的操作条：四个文字按钮一行，不是两行实心按钮 */
   .folder-acts{display:flex; gap:12px; flex-shrink:0; align-items:center;}
-  .folder-acts button{background:none; border:none; padding:4px 0; font-size:12px; font-weight:600; color:var(--ink); cursor:pointer; white-space:nowrap;}
+  .folder-acts button{background:none; border:none; padding:4px 0; font-size:12px; font-weight:600; color:var(--ink-line, var(--ink)); cursor:pointer; white-space:nowrap;}
   .folder-acts button.warn{color:#E0453C;}
   .repo-acts{display:flex;}
-  .repo-acts button{flex:1; background:none; border:none; padding:4px 0; font-size:12.5px; font-weight:600; color:var(--ink); cursor:pointer;}
+  .repo-acts button{flex:1; background:none; border:none; padding:4px 0; font-size:12.5px; font-weight:600; color:var(--ink-line, var(--ink)); cursor:pointer;}
   .repo-acts button.warn{color:#E0453C;}
   .repo-acts button:disabled{color:var(--text-faint); cursor:default;}
 
@@ -304,8 +304,8 @@
   .desc-badge.empty{background:var(--border); color:var(--text-faint);}
   .emoji-caption.pending{color:var(--text-faint); font-style:italic;}
   /* 一条描述词：文字 + 写的人数 */
-  .desc-chip{display:inline-flex; align-items:center; gap:6px; max-width:100%; padding:7px 10px; border:1px solid var(--border); border-radius:999px; background:none; font-size:13px; color:var(--ink); cursor:pointer; text-align:left;}
-  .desc-chip.on{background:var(--ink); color:var(--ink-contrast); border-color:var(--ink);}
+  .desc-chip{display:inline-flex; align-items:center; gap:6px; max-width:100%; padding:7px 10px; border:1px solid var(--border); border-radius:999px; background:none; font-size:13px; color:var(--ink-line, var(--ink)); cursor:pointer; text-align:left;}
+  .desc-chip.on{background:var(--ink); color:var(--ink-contrast); border-color:var(--ink-line, var(--ink));}
   .desc-chip .n{font-size:10px; opacity:.65; flex-shrink:0;}
   .desc-chip .t{overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
   .desc-chip-row{display:flex; flex-wrap:wrap; gap:8px; margin-top:8px;}
@@ -314,9 +314,9 @@
   .desc-pick-main{flex:1; min-width:0;}
   .af-ctl{display:flex; align-items:center; gap:10px; margin-top:12px;}
   .af-ctl label{font-size:11.5px; color:var(--text-dim); flex-shrink:0;}
-  .af-ctl input[type=range]{flex:1; accent-color:var(--ink);}
+  .af-ctl input[type=range]{flex:1; accent-color:var(--ink-line, var(--ink));}
   /* 指路的授权提示：这是法律/礼节问题，必须显眼，不能做成灰色小字 */
-  .guide-note{border:1px solid var(--border); border-left:3px solid var(--ink); background:var(--bg-elev); padding:10px 12px; font-size:11.5px; line-height:1.75; color:var(--text-dim); margin-top:12px;}
+  .guide-note{border:1px solid var(--border); border-left:3px solid var(--ink-line, var(--ink)); background:var(--bg-elev); padding:10px 12px; font-size:11.5px; line-height:1.75; color:var(--text-dim); margin-top:12px;}
   .post-body{font-size:13.5px; line-height:1.85; color:var(--text); white-space:pre-wrap; word-break:break-word;}
 
   /* overlay (detail + AI + settings) */
@@ -333,7 +333,7 @@
   .action-row{display:flex; align-items:center; gap:18px; margin-top:12px;}
   .action-btn{display:flex; align-items:center; gap:6px; background:none; border:none; cursor:pointer; padding:0; color:var(--text-dim);}
   .action-btn svg{width:17px; height:17px; transition:transform .2s ease;}
-  .action-btn.active{color:var(--ink);}
+  .action-btn.active{color:var(--ink-line, var(--ink));}
   .action-btn span{font-size:12px; font-family:ui-monospace, monospace;}
   @keyframes pop{0%{transform:scale(1);}45%{transform:scale(1.3);}100%{transform:scale(1);}}
   .action-btn.pop svg{animation:pop .32s cubic-bezier(.3,1.5,.6,1);}
@@ -358,12 +358,12 @@
   .sheet-head{display:flex; align-items:center; justify-content:space-between; padding:14px 16px; border-bottom:1px solid var(--border-soft); flex-shrink:0;}
   .sheet-head .t{font-size:13px; font-weight:600;}
   .sheet-tools{display:flex; gap:14px; padding:10px 16px; font-size:12px; border-bottom:1px solid var(--border-soft); flex-shrink:0;}
-  .sheet-tools button{background:none;border:none;cursor:pointer;color:var(--ink);font-weight:600;}
+  .sheet-tools button{background:none;border:none;cursor:pointer;color:var(--ink-line, var(--ink));font-weight:600;}
   .sel-grid{display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; padding:12px 16px; overflow-y:auto;}
   .sel-cell{position:relative;}
   .sel-cell img{width:100%; aspect-ratio:1/1; object-fit:cover; display:block; background:var(--bg-elev);}
   .sel-check{position:absolute; top:4px; right:4px; width:16px; height:16px; border-radius:50%; background:rgba(255,255,255,.9); border:1px solid var(--border); display:flex; align-items:center; justify-content:center;}
-  .sel-check.on{background:var(--ink); border-color:var(--ink);}
+  .sel-check.on{background:var(--ink); border-color:var(--ink-line, var(--ink));}
   .sel-check svg{width:10px; height:10px;}
   .sheet-scroll{padding:12px 16px; overflow-y:auto;}
   .sheet-footer{padding:14px 16px; flex-shrink:0; border-top:1px solid var(--border-soft);}
@@ -377,7 +377,7 @@
   .tab-btn{flex:1; background:none; border:none; padding:12px 4px 7px; display:flex; flex-direction:column; align-items:center; gap:3px; cursor:pointer; color:var(--text-faint);}
   .tab-btn svg{width:20px; height:20px;}
   .tab-btn span{font-size:10px; font-weight:600;}
-  .tab-btn.active{color:var(--ink);}
+  .tab-btn.active{color:var(--ink-line, var(--ink));}
 
   .cat-sticky{position:sticky; top:0; z-index:5; background:var(--bg); margin:0 -18px; padding:10px 18px 8px; border-bottom:1px solid var(--border-soft);}
 
@@ -394,7 +394,7 @@
   /* P1: home profile banner */
   .profile-banner{display:flex; align-items:center; justify-content:space-between; gap:14px; padding-bottom:16px;}
   .profile-banner-left{flex:1; min-width:0;}
-  .profile-name{font-size:25px; font-weight:800; color:var(--ink); letter-spacing:-.01em; line-height:1.15;}
+  .profile-name{font-size:25px; font-weight:800; color:var(--ink-line, var(--ink)); letter-spacing:-.01em; line-height:1.15;}
   .profile-status{border:none; background:transparent; outline:none; font-size:13px; color:var(--text-faint); padding:5px 0 0; width:100%;}
   .avatar-btn{width:60px; height:60px; border-radius:50%; overflow:hidden; border:1px solid var(--border-soft); background:var(--bg-elev); flex-shrink:0; display:flex; align-items:center; justify-content:center; padding:0; cursor:pointer;}
   #cropViewport{width:260px; height:260px; border-radius:50%; overflow:hidden; position:relative; border:1px solid var(--border); background:var(--bg-elev); touch-action:none; cursor:grab;}
@@ -415,7 +415,7 @@
   .ig-status{font-size:12.5px; color:var(--text-dim); margin-top:3px; line-height:1.5;}
   .ig-tabbar{display:flex; border-top:1px solid var(--border); margin-top:16px;}
   .ig-tab{flex:1; display:flex; align-items:center; justify-content:center; padding:11px 0; background:none; border:none; color:var(--text-faint); border-top:2px solid transparent; margin-top:-1px; cursor:pointer;}
-  .ig-tab.active{color:var(--ink); border-top-color:var(--ink);}
+  .ig-tab.active{color:var(--ink-line, var(--ink)); border-top-color:var(--ink-line, var(--ink));}
   .ig-tab svg{width:20px; height:20px;}
   .ig-grid-wrap{margin-top:14px;}
 
@@ -441,7 +441,7 @@
 
   /* auth: loading + join screens */
   #loadingOverlay{position:fixed; inset:0; z-index:120; background:var(--bg); display:flex; align-items:center; justify-content:center; max-width:480px; margin:0 auto;}
-  .boot-spin{width:24px; height:24px; border-radius:50%; border:2px solid var(--border); border-top-color:var(--ink); animation:spin .8s linear infinite;}
+  .boot-spin{width:24px; height:24px; border-radius:50%; border:2px solid var(--border); border-top-color:var(--ink-line, var(--ink)); animation:spin .8s linear infinite;}
   #joinOverlay{position:fixed; inset:0; z-index:110; background:var(--bg); display:none; flex-direction:column; justify-content:center; max-width:480px; margin:0 auto; padding:28px;}
   #joinOverlay.open{display:flex;}
   .join-error{font-size:12px; color:var(--text); font-weight:600; margin-top:10px; display:none; text-align:center;}
@@ -3067,42 +3067,27 @@ async function repoRemovePack(folderId, pack){
 // 等于在鼓励撞出难看的搭配；配好几套，怎么点都不会土。
 // 给定的浅调（#e7f4ff / #e7e7ff / #fdeef2）放在 --bg-elev 这一层，
 // 主底色再往白提一档 —— 整屏都铺满那个浓度会闷，卡片和底之间也就没层次了。
+// 底色只留"默认"和"夜间"两种，不做花里胡哨的配色套装 ——
+// 换主色是换主色，整屏底色跟着一起变是另一回事。
 const SURFACE_PRESETS = [
-  { id:'white', name:'默认', ink:'#111111', v:{
+  { id:'white', name:'默认', v:{
     '--bg':'#FFFFFF','--bg-elev':'#F7F7F7','--bg-hover':'#EDEDED',
     '--border':'#D9D9D9','--border-soft':'#EDEDED',
     '--text':'#333333','--text-dim':'#666666','--text-faint':'#999999' }, outside:'#EBEBEB' },
-
-  { id:'aqua', name:'水色', ink:'#002FA7', v:{
-    '--bg':'#F7FBFF','--bg-elev':'#E7F4FF','--bg-hover':'#D8EAFA',
-    '--border':'#C7DFF2','--border-soft':'#DFEFFC',
-    '--text':'#1B2A38','--text-dim':'#55667A','--text-faint':'#8B9AAB' }, outside:'#DBEBF9' },
-
-  { id:'mist', name:'雾紫', ink:'#2B2B8F', v:{
-    '--bg':'#F9F9FF','--bg-elev':'#E7E7FF','--bg-hover':'#DADAF7',
-    '--border':'#CBCBEA','--border-soft':'#E2E2F7',
-    '--text':'#22223A','--text-dim':'#5A5A78','--text-faint':'#9292AC' }, outside:'#DEDEF6' },
-
-  { id:'pink', name:'粉黑', ink:'#1C1518', v:{
-    '--bg':'#FFFAFC','--bg-elev':'#FDEEF2','--bg-hover':'#F8E1E8',
-    '--border':'#EED4DC','--border-soft':'#FAE7ED',
-    '--text':'#2A2225','--text-dim':'#6A5C61','--text-faint':'#A2939A' }, outside:'#F6E3E9' },
-
-  { id:'sage', name:'浅绿', ink:'#4F7A5B', v:{
-    '--bg':'#FAFDFA','--bg-elev':'#EAF4EC','--bg-hover':'#DEECE1',
-    '--border':'#CFE2D4','--border-soft':'#E5F0E8',
-    '--text':'#223026','--text-dim':'#586A5D','--text-faint':'#8FA095' }, outside:'#E0EDE3' },
-
-  { id:'klein', name:'克莱因蓝', ink:'#002FA7', v:{
-    '--bg':'#FFFFFF','--bg-elev':'#F4F6FB','--bg-hover':'#E9EDF7',
-    '--border':'#D5DCEB','--border-soft':'#E8ECF5',
-    '--text':'#1A1F2E','--text-dim':'#575F73','--text-faint':'#8D95A8' }, outside:'#E6EAF3' },
-
-  { id:'night', name:'夜间', ink:'#E8E9EB', v:{
+  { id:'night', name:'夜间', v:{
     '--bg':'#16171A','--bg-elev':'#1F2124','--bg-hover':'#292C30',
     '--border':'#33373C','--border-soft':'#25282C',
     '--text':'#E6E7E9','--text-dim':'#A9ADB3','--text-faint':'#7B8087' }, outside:'#0E0F10' },
 ];
+// 主色：只管上面那排 tab、按钮这些"填充"的地方。
+const ACCENT_PRESETS = [
+  { name:'默认', c:'#111111' },
+  { name:'克莱因蓝', c:'#002FA7' },
+  { name:'水色', c:'#E7F4FF' },
+  { name:'雾紫', c:'#E7E7FF' },
+  { name:'粉', c:'#FDEEF2' },
+];
+
 // 主色上面压什么颜色的字：白字和深字各算一遍对比度，取高的那个。
 // 之前是按亮度卡一个阈值，结果淡色主色（杏、藕这类）全被判成配白字，
 // 实测只有 2.2:1，小字基本看不清；改成比对比度之后同样这些色拿到 8:1。
@@ -3125,6 +3110,41 @@ function inkContrast(hex){
   return contrastRatio(hex, '#FFFFFF') >= contrastRatio(hex, '#111111') ? '#FFFFFF' : '#111111';
 }
 
+// --ink 在样式里有一半是当文字和描边用的（color / border-color）。
+// 浅主色直接拿去当文字，白底上就是一片看不见。所以另算一个 --ink-line：
+// 保留同一个色相，只把亮度往下压到跟底色对比度够看清为止。
+// 深色主色压不动、原样返回；用户自己取的任何颜色也走同一条路。
+function hexToHsl(hex){
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex||'').trim());
+  if(!m) return null;
+  const n = parseInt(m[1],16);
+  let r=((n>>16)&255)/255, g=((n>>8)&255)/255, b=(n&255)/255;
+  const mx=Math.max(r,g,b), mn=Math.min(r,g,b), d=mx-mn;
+  let h=0; const l=(mx+mn)/2;
+  const sat = d===0 ? 0 : d/(1-Math.abs(2*l-1));
+  if(d!==0){
+    if(mx===r) h=((g-b)/d)%6; else if(mx===g) h=(b-r)/d+2; else h=(r-g)/d+4;
+    h*=60; if(h<0) h+=360;
+  }
+  return [h, sat, l];
+}
+function hslToHex(h,s,l){
+  const c=(1-Math.abs(2*l-1))*s, x=c*(1-Math.abs(((h/60)%2)-1)), m=l-c/2;
+  let [r,g,b] = h<60?[c,x,0]:h<120?[x,c,0]:h<180?[0,c,x]:h<240?[0,x,c]:h<300?[x,0,c]:[c,0,x];
+  const f=v=>Math.round((v+m)*255).toString(16).padStart(2,'0');
+  return '#'+f(r)+f(g)+f(b);
+}
+function readableInk(hex, bg){
+  const hsl = hexToHsl(hex);
+  if(!hsl) return '#111111';
+  let [h,sat,l] = hsl;
+  for(let i=0; i<60 && contrastRatio(hslToHex(h,sat,l), bg) < 4.5; i++){
+    // 夜间底是深的，要往亮里提；浅底往深里压
+    l = srgbLum(bg) > 0.4 ? Math.max(0, l-0.015) : Math.min(1, l+0.015);
+  }
+  return hslToHex(h,sat,l);
+}
+
 const THEME_KEY = 'zhp_theme_v1';
 let theme = { surface:'white', accent:'', wallScrim:0.86, hasWall:false };
 function loadTheme(){
@@ -3136,13 +3156,11 @@ function loadTheme(){
 function saveTheme(){
   try{ localStorage.setItem(THEME_KEY, JSON.stringify(theme)); }catch(e){}
 }
-function surfaceInk(id){
-  const sf = SURFACE_PRESETS.find(s=>s.id===id) || SURFACE_PRESETS[0];
-  return sf.ink;
+// 夜间底色下，默认主色要反过来是浅的，否则黑底黑按钮
+function currentInk(){
+  if(theme.accent) return theme.accent;
+  return theme.surface === 'night' ? '#E8E9EB' : '#111111';
 }
-// 主色留空表示"跟着色系走"，这样换色系时主色自动跟上；
-// 自己取过色才固定下来。
-function currentInk(){ return theme.accent || surfaceInk(theme.surface); }
 function applyTheme(){
   const root = document.documentElement;
   const sf = SURFACE_PRESETS.find(s=>s.id===theme.surface) || SURFACE_PRESETS[0];
@@ -3150,6 +3168,7 @@ function applyTheme(){
   const ink = currentInk();
   root.style.setProperty('--ink', ink);
   root.style.setProperty('--ink-contrast', inkContrast(ink));
+  root.style.setProperty('--ink-line', readableInk(ink, sf.v['--bg']));
   document.body.style.background = sf.outside;
   const frame = document.querySelector('.frame');
   if(frame) frame.classList.toggle('has-wall', !!theme.hasWall);
@@ -3213,18 +3232,21 @@ function openThemeSheet(){
     $('themeSheetBox').innerHTML = `
       <div class="sheet-head"><span class="t">外观</span><button class="icon-btn" id="thClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button></div>
       <div class="sheet-scroll">
-        <div class="field-label" style="margin-top:0;">色系</div>
-        <div class="chip-row">${SURFACE_PRESETS.map(s=>
-          `<button class="chip ${theme.surface===s.id?'active':''}" data-surface="${s.id}">${esc(s.name)}</button>`).join('')}</div>
-
-        <div class="field-label">主色</div>
-        <div class="swatch-row">
-          <button class="swatch ${theme.accent?'':'on'}" data-accent="" style="background:${esc(surfaceInk(theme.surface))};" aria-label="跟随色系"></button>
+        <div class="field-label" style="margin-top:0;">主色</div>
+        <div class="swatch-row">${ACCENT_PRESETS.map(a=>
+          `<button class="swatch ${currentInk().toLowerCase()===a.c.toLowerCase()?'on':''}" data-accent="${a.c}" style="background:${a.c};" aria-label="${esc(a.name)}"></button>`).join('')}
           <label class="swatch custom" style="background:${esc(currentInk())};">
             <input type="color" id="thAccent" value="${esc(currentInk())}">
           </label>
         </div>
-        <p class="field-help">默认跟着色系走。第二格可以自己取色，按钮上的文字颜色会自动配深浅。</p>
+        <p class="field-help">改的是上面那排切换、按钮这些地方。最后一格可以自己取色；文字颜色会自动配深浅，浅色也不会看不清。</p>
+
+        <div class="perm-list" style="margin-top:16px;">
+          <div class="perm-row" id="thNightRow">
+            <div class="sel-check-inline ${theme.surface==='night'?'on':''}">${theme.surface==='night'?CHECK_SVG:''}</div>
+            <span class="perm-label">夜间模式</span>
+          </div>
+        </div>
 
         <div class="field-label">壁纸</div>
         <div class="btn-row">
@@ -3244,9 +3266,10 @@ function openThemeSheet(){
       </div>`;
 
     $('thClose').addEventListener('click', ()=>$('themeSheetMask').classList.remove('open'));
-    $('themeSheetBox').querySelectorAll('[data-surface]').forEach(b=>b.addEventListener('click', ()=>{
-      theme.surface = b.dataset.surface; saveTheme(); applyTheme(); draw();
-    }));
+    $('thNightRow').addEventListener('click', ()=>{
+      theme.surface = theme.surface==='night' ? 'white' : 'night';
+      saveTheme(); applyTheme(); draw();
+    });
     $('themeSheetBox').querySelectorAll('[data-accent]').forEach(b=>b.addEventListener('click', ()=>{
       theme.accent = b.dataset.accent; saveTheme(); applyTheme(); draw();
     }));
@@ -4120,8 +4143,10 @@ function renderMy(){
   if(cnt) cnt.textContent = repoItems.length ? `${repoItems.length} 张` : '';
   const tn = $('themeEntryNote');
   if(tn){
-    const sf = SURFACE_PRESETS.find(x=>x.id===theme.surface) || SURFACE_PRESETS[0];
-    tn.textContent = sf.name + (theme.hasWall ? ' · 有壁纸' : '');
+    const parts = [];
+    if(theme.surface === 'night') parts.push('夜间');
+    if(theme.hasWall) parts.push('有壁纸');
+    tn.textContent = parts.join(' · ');
   }
   let items, emptyText, action;
   if(myTab==='works'){
