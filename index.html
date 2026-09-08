@@ -254,6 +254,11 @@
 
   .af-hint{font-size:11px; color:var(--text-faint); text-align:center; margin-top:8px; line-height:1.6;}
 
+  /* 管理员通知：正文要能读、链接要能点 */
+  .notif-admin{font-size:12px; font-weight:700; color:var(--text-dim);}
+  .notif-body{font-size:13px; line-height:1.7; margin-top:4px; white-space:pre-wrap; word-break:break-word;}
+  .notif-body a{color:var(--ink); text-decoration:underline; text-underline-offset:2px;}
+
   /* 我的仓库 */
   /* 「我的」页里只留一行入口，仓库本身是整页 —— 塞在个人页里控件叠控件，
      内容还没露头先看见一堵墙 */
@@ -1730,24 +1735,48 @@ function timeAgo(ts){
   if(s<86400*30) return Math.floor(s/86400)+' 天前';
   return new Date(ts).toLocaleDateString();
 }
+// 通知正文里的链接要能点（管理员可能发的就是个红包链接，点不开等于没发）。
+// 做法只有一种是安全的：先把整段正文 esc 掉，再单独把 http(s) 开头的那一段
+// 换成 <a>。绝不能直接把正文当 HTML 插进去 —— 那等于给任何能写通知的人
+// 一个注入口。协议也只认 http/https，javascript: data: 一概不匹配。
+function linkifyNotice(text){
+  return esc(text).replace(/https?:\/\/[^\s<>"']+/g,
+    u => `<a href="${u}" target="_blank" rel="noopener noreferrer">${u}</a>`);
+}
+function notifRowHtml(n){
+  if(n.type === 'admin'){
+    // 管理员通知：显示正文本身，不指向任何作品，所以整行不可点，
+    // 只有正文里的链接可点
+    return `<div class="row-item">
+      <div class="row-main">
+        <div class="notif-admin">📣 ${esc(n.actor_nickname || '管理员')}</div>
+        <div class="notif-body">${linkifyNotice(n.body || '')}</div>
+        <div style="font-size:11px; color:var(--text-dim); margin-top:4px;">${timeAgo(n.created_at)}</div>
+      </div>
+    </div>`;
+  }
+  return `<div class="row-item" data-notif-collection="${esc(n.collection_id||'')}" data-notif-font="${esc(n.font_id||'')}" data-notif-post="${esc(n.post_id||'')}" style="cursor:pointer;">
+    <div class="row-main">
+      <div style="font-size:13px;">❤️ ${authorLinkHtml(n.actor_id, n.actor_nickname||'有人')} 点赞了你的《${esc(notifTargetTitle(n))}》</div>
+      <div style="font-size:11px; color:var(--text-dim); margin-top:2px;">${timeAgo(n.created_at)}</div>
+    </div>
+  </div>`;
+}
 function renderNotifSheet(){
   $('notifSheetBox').innerHTML = `
     <div class="sheet-head"><span class="t">通知</span><button class="icon-btn" id="notifCloseBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button></div>
     <div class="sheet-scroll">
-      ${notifications.length ? `<div class="row-list">${notifications.map(n=>`
-        <div class="row-item" data-notif-collection="${esc(n.collection_id||'')}" data-notif-font="${esc(n.font_id||'')}" data-notif-post="${esc(n.post_id||'')}" style="cursor:pointer;">
-          <div class="row-main">
-            <div style="font-size:13px;">❤️ ${authorLinkHtml(n.actor_id, n.actor_nickname||'有人')} 点赞了你的《${esc(notifTargetTitle(n))}》</div>
-            <div style="font-size:11px; color:var(--text-dim); margin-top:2px;">${timeAgo(n.created_at)}</div>
-          </div>
-        </div>`).join('')}</div>` : '<p class="hint">还没有收到点赞提醒</p>'}
+      ${notifications.length ? `<div class="row-list">${notifications.map(notifRowHtml).join('')}</div>`
+        : '<p class="hint">还没有收到通知</p>'}
     </div>
   `;
   $('notifCloseBtn').addEventListener('click', ()=>$('notifSheetMask').classList.remove('open'));
   $('notifSheetBox').querySelectorAll('[data-notif-collection], [data-notif-font], [data-notif-post]').forEach(el=>{
     el.addEventListener('click', (e)=>{
-      if(e.target.closest('.author-link')) return;
+      // 点作者名跳主页、点链接开链接，都不该顺带把弹层关掉再跳作品
+      if(e.target.closest('.author-link') || e.target.closest('a')) return;
       const cid = el.dataset.notifCollection, fid = el.dataset.notifFont, pid = el.dataset.notifPost;
+      if(!cid && !fid && !pid) return;
       $('notifSheetMask').classList.remove('open');
       if(cid) openDetail(cid); else if(fid) openFontDetail(fid); else if(pid) openPostDetail(pid);
     });
