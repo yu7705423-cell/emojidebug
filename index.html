@@ -5609,8 +5609,12 @@ function setupAvatarFrame(url, title, p){
   // 头像默认只占画布的这么大，剩下的一圈留给头像框往外长。
   // 铺满整块画布的话，框想比头像大就只能超出画布，一超出就被裁掉。
   const AV_BASE = 0.72;
-  // 两层都不许拖到完全看不见：中心点必须还在画布里
-  const clampPan = v => Math.max(-S/2, Math.min(S/2, v));
+  // 每一层的可拖范围要按【那一层自己多大】算，不能固定成画布的一半。
+  // 固定 ±S/2 时：框放大到 400%（有四个画布那么宽），想看它的边角得挪
+  // 一个半画布，结果拖到一半就卡住，边角永远够不着 —— 这就是"只能显示一个角、
+  // 又挪不动"的原因。图上任意一点都要能拖到画布正中，也就是 ±自身尺寸的一半；
+  // 比画布小的图则至少能拖到画布边缘。
+  const clampTo = (v, span) => { const m = Math.max(span, S) / 2; return Math.max(-m, Math.min(m, v)); };
   const ZOOM = { frame:{ min:40, max:400, label:'缩放头像框' },
                  avatar:{ min:30, max:140, label:'缩放头像' } };
 
@@ -5692,8 +5696,13 @@ function setupAvatarFrame(url, title, p){
     // 屏幕上挪 1px，画布上要挪 S/显示宽度 px，否则手感会飘
     const k = S / stage.getBoundingClientRect().width;
     const dx = (e.clientX - lastX) * k, dy = (e.clientY - lastY) * k;
-    if(st.target === 'avatar'){ st.ax = clampPan(st.ax + dx); st.ay = clampPan(st.ay + dy); }
-    else { st.x = clampPan(st.x + dx); st.y = clampPan(st.y + dy); }
+    if(st.target === 'avatar'){
+      const span = S * AV_BASE * st.avScale;
+      st.ax = clampTo(st.ax + dx, span); st.ay = clampTo(st.ay + dy, span);
+    } else {
+      const g = st.frame ? frameGeom(st.frame) : { w:S, h:S };
+      st.x = clampTo(st.x + dx, g.w); st.y = clampTo(st.y + dy, g.h);
+    }
     lastX = e.clientX; lastY = e.clientY;
     draw();
   });
