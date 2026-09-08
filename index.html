@@ -3059,45 +3059,74 @@ async function repoRemovePack(folderId, pack){
 // 只改 CSS 变量的值和一层壁纸，不碰任何结构、不注入任何选择器 ——
 // 所以不管调成什么样，界面都不可能"改崩"，也就不需要安全模式那一套。
 // （能贴自定义 CSS 的进阶档是另一回事，那个必须先有退路才能做。）
+// 一套色系 = 底色 + 主色一起定。拆成"底色"和"主色"两排让人自由组合，
+// 等于在鼓励撞出难看的搭配；配好几套，怎么点都不会土。
+// 挑色的原则：宁可浅、宁可淡。又深又灰的颜色（藏蓝、墨绿那种）配上明朝体
+// 白底，出来就是政府网站的味道 —— 上一版就栽在这。
+// 一套色系 = 底色 + 主色一起定。拆成"底色"和"主色"两排让人自由组合，
+// 等于在鼓励撞出难看的搭配；配好几套，怎么点都不会土。
+// 给定的浅调（#e7f4ff / #e7e7ff / #fdeef2）放在 --bg-elev 这一层，
+// 主底色再往白提一档 —— 整屏都铺满那个浓度会闷，卡片和底之间也就没层次了。
 const SURFACE_PRESETS = [
-  { id:'white', name:'默认白', v:{
+  { id:'white', name:'默认', ink:'#111111', v:{
     '--bg':'#FFFFFF','--bg-elev':'#F7F7F7','--bg-hover':'#EDEDED',
     '--border':'#D9D9D9','--border-soft':'#EDEDED',
     '--text':'#333333','--text-dim':'#666666','--text-faint':'#999999' }, outside:'#EBEBEB' },
-  { id:'cool', name:'冷白', v:{
-    '--bg':'#FBFCFD','--bg-elev':'#F1F4F6','--bg-hover':'#E7EBEE',
-    '--border':'#D5DBE0','--border-soft':'#E8ECEF',
-    '--text':'#2F3438','--text-dim':'#626A70','--text-faint':'#949CA3' }, outside:'#E4E9ED' },
-  { id:'warm', name:'米白', v:{
-    '--bg':'#FDFBF7','--bg-elev':'#F6F2EA','--bg-hover':'#EDE7DC',
-    '--border':'#DED7C9','--border-soft':'#EDE7DC',
-    '--text':'#3A352C','--text-dim':'#6B6459','--text-faint':'#9C958A' }, outside:'#EEE8DC' },
-  { id:'night', name:'夜间', v:{
-    '--bg':'#17181A','--bg-elev':'#202225','--bg-hover':'#2A2D31',
-    '--border':'#34383D','--border-soft':'#26292D',
+
+  { id:'aqua', name:'水色', ink:'#002FA7', v:{
+    '--bg':'#F7FBFF','--bg-elev':'#E7F4FF','--bg-hover':'#D8EAFA',
+    '--border':'#C7DFF2','--border-soft':'#DFEFFC',
+    '--text':'#1B2A38','--text-dim':'#55667A','--text-faint':'#8B9AAB' }, outside:'#DBEBF9' },
+
+  { id:'mist', name:'雾紫', ink:'#2B2B8F', v:{
+    '--bg':'#F9F9FF','--bg-elev':'#E7E7FF','--bg-hover':'#DADAF7',
+    '--border':'#CBCBEA','--border-soft':'#E2E2F7',
+    '--text':'#22223A','--text-dim':'#5A5A78','--text-faint':'#9292AC' }, outside:'#DEDEF6' },
+
+  { id:'pink', name:'粉黑', ink:'#1C1518', v:{
+    '--bg':'#FFFAFC','--bg-elev':'#FDEEF2','--bg-hover':'#F8E1E8',
+    '--border':'#EED4DC','--border-soft':'#FAE7ED',
+    '--text':'#2A2225','--text-dim':'#6A5C61','--text-faint':'#A2939A' }, outside:'#F6E3E9' },
+
+  { id:'sage', name:'浅绿', ink:'#4F7A5B', v:{
+    '--bg':'#FAFDFA','--bg-elev':'#EAF4EC','--bg-hover':'#DEECE1',
+    '--border':'#CFE2D4','--border-soft':'#E5F0E8',
+    '--text':'#223026','--text-dim':'#586A5D','--text-faint':'#8FA095' }, outside:'#E0EDE3' },
+
+  { id:'klein', name:'克莱因蓝', ink:'#002FA7', v:{
+    '--bg':'#FFFFFF','--bg-elev':'#F4F6FB','--bg-hover':'#E9EDF7',
+    '--border':'#D5DCEB','--border-soft':'#E8ECF5',
+    '--text':'#1A1F2E','--text-dim':'#575F73','--text-faint':'#8D95A8' }, outside:'#E6EAF3' },
+
+  { id:'night', name:'夜间', ink:'#E8E9EB', v:{
+    '--bg':'#16171A','--bg-elev':'#1F2124','--bg-hover':'#292C30',
+    '--border':'#33373C','--border-soft':'#25282C',
     '--text':'#E6E7E9','--text-dim':'#A9ADB3','--text-faint':'#7B8087' }, outside:'#0E0F10' },
 ];
-const ACCENT_PRESETS = [
-  { id:'ink',   name:'墨黑', c:'#000000' },
-  { id:'navy',  name:'藏蓝', c:'#243A5E' },
-  { id:'green', name:'墨绿', c:'#2C4A3B' },
-  { id:'wine',  name:'酒红', c:'#7A2E3B' },
-  { id:'plum',  name:'紫',   c:'#4A3A63' },
-];
-// 主色上面压什么颜色的字。按亮度算，这样用户自选任何颜色都不会出现
-// 黑底黑字或白底白字 —— 硬写死一个就总有一半颜色是废的。
-function inkContrast(hex){
+// 主色上面压什么颜色的字：白字和深字各算一遍对比度，取高的那个。
+// 之前是按亮度卡一个阈值，结果淡色主色（杏、藕这类）全被判成配白字，
+// 实测只有 2.2:1，小字基本看不清；改成比对比度之后同样这些色拿到 8:1。
+// 好处是用户自己取的任何颜色也自动挑到更清楚的那一种，不用再调阈值。
+function srgbLum(hex){
   const m = /^#?([0-9a-f]{6})$/i.exec(String(hex||'').trim());
-  if(!m) return '#FFFFFF';
+  if(!m) return 0;
   const n = parseInt(m[1],16);
   const [r,g,b] = [(n>>16)&255, (n>>8)&255, n&255].map(v=>{
-    const s = v/255; return s <= 0.03928 ? s/12.92 : Math.pow((s+0.055)/1.055, 2.4);
+    const c = v/255; return c <= 0.03928 ? c/12.92 : Math.pow((c+0.055)/1.055, 2.4);
   });
-  return (0.2126*r + 0.7152*g + 0.0722*b) > 0.45 ? '#111111' : '#FFFFFF';
+  return 0.2126*r + 0.7152*g + 0.0722*b;
+}
+function contrastRatio(a, b){
+  const la = srgbLum(a), lb = srgbLum(b);
+  return (Math.max(la,lb) + 0.05) / (Math.min(la,lb) + 0.05);
+}
+function inkContrast(hex){
+  if(!/^#?[0-9a-f]{6}$/i.test(String(hex||'').trim())) return '#FFFFFF';
+  return contrastRatio(hex, '#FFFFFF') >= contrastRatio(hex, '#111111') ? '#FFFFFF' : '#111111';
 }
 
 const THEME_KEY = 'zhp_theme_v1';
-let theme = { surface:'white', accent:'#000000', wallScrim:0.86, hasWall:false };
+let theme = { surface:'white', accent:'', wallScrim:0.86, hasWall:false };
 function loadTheme(){
   try{
     const raw = localStorage.getItem(THEME_KEY);
@@ -3107,12 +3136,20 @@ function loadTheme(){
 function saveTheme(){
   try{ localStorage.setItem(THEME_KEY, JSON.stringify(theme)); }catch(e){}
 }
+function surfaceInk(id){
+  const sf = SURFACE_PRESETS.find(s=>s.id===id) || SURFACE_PRESETS[0];
+  return sf.ink;
+}
+// 主色留空表示"跟着色系走"，这样换色系时主色自动跟上；
+// 自己取过色才固定下来。
+function currentInk(){ return theme.accent || surfaceInk(theme.surface); }
 function applyTheme(){
   const root = document.documentElement;
   const sf = SURFACE_PRESETS.find(s=>s.id===theme.surface) || SURFACE_PRESETS[0];
   Object.entries(sf.v).forEach(([k,v])=>root.style.setProperty(k, v));
-  root.style.setProperty('--ink', theme.accent || '#000000');
-  root.style.setProperty('--ink-contrast', inkContrast(theme.accent));
+  const ink = currentInk();
+  root.style.setProperty('--ink', ink);
+  root.style.setProperty('--ink-contrast', inkContrast(ink));
   document.body.style.background = sf.outside;
   const frame = document.querySelector('.frame');
   if(frame) frame.classList.toggle('has-wall', !!theme.hasWall);
@@ -3176,18 +3213,18 @@ function openThemeSheet(){
     $('themeSheetBox').innerHTML = `
       <div class="sheet-head"><span class="t">外观</span><button class="icon-btn" id="thClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button></div>
       <div class="sheet-scroll">
-        <div class="field-label" style="margin-top:0;">底色</div>
+        <div class="field-label" style="margin-top:0;">色系</div>
         <div class="chip-row">${SURFACE_PRESETS.map(s=>
           `<button class="chip ${theme.surface===s.id?'active':''}" data-surface="${s.id}">${esc(s.name)}</button>`).join('')}</div>
 
         <div class="field-label">主色</div>
-        <div class="swatch-row">${ACCENT_PRESETS.map(a=>
-          `<button class="swatch ${theme.accent.toLowerCase()===a.c.toLowerCase()?'on':''}" data-accent="${a.c}" style="background:${a.c};" aria-label="${esc(a.name)}"></button>`).join('')}
-          <label class="swatch custom" style="background:${esc(theme.accent)};">
-            <input type="color" id="thAccent" value="${esc(theme.accent)}">
+        <div class="swatch-row">
+          <button class="swatch ${theme.accent?'':'on'}" data-accent="" style="background:${esc(surfaceInk(theme.surface))};" aria-label="跟随色系"></button>
+          <label class="swatch custom" style="background:${esc(currentInk())};">
+            <input type="color" id="thAccent" value="${esc(currentInk())}">
           </label>
         </div>
-        <p class="field-help">最后一格可以自己取色。按钮上的文字颜色会跟着自动配。</p>
+        <p class="field-help">默认跟着色系走。第二格可以自己取色，按钮上的文字颜色会自动配深浅。</p>
 
         <div class="field-label">壁纸</div>
         <div class="btn-row">
@@ -3218,6 +3255,9 @@ function openThemeSheet(){
       theme.accent = e.target.value; applyTheme();
       e.target.parentElement.style.background = theme.accent;
     });
+    $('themeSheetBox').querySelectorAll('[data-accent]').forEach(b=>b.addEventListener('click', ()=>{
+      theme.accent = b.dataset.accent; saveTheme(); applyTheme(); draw();
+    }));
     $('thAccent').addEventListener('change', ()=>{ saveTheme(); draw(); });
     $('thPick').addEventListener('click', ()=>$('thWallFile').click());
     $('thWallFile').addEventListener('change', async e=>{
@@ -3235,7 +3275,7 @@ function openThemeSheet(){
     }
     $('thReset').addEventListener('click', async ()=>{
       await clearWallpaper();
-      theme = { surface:'white', accent:'#000000', wallScrim:0.86, hasWall:false };
+      theme = { surface:'white', accent:'', wallScrim:0.86, hasWall:false };
       saveTheme(); applyTheme(); draw(); showToast('已恢复默认外观');
     });
   }
