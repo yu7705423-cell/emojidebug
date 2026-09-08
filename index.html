@@ -2969,6 +2969,15 @@ function setRepoCacheImages(on){
   try{ localStorage.setItem('zhp_repo_cache_img', on ? '1' : '0'); }catch(e){}
 }
 
+// 发布时顺手在仓库里留一份。默认开：自己刚整理好的东西本来就该在自己仓库里，
+// 不然要先发布、再进仓库重新导入一遍，同一批图整理两遍。
+function repoSaveOnPublish(){
+  try{ return localStorage.getItem('zhp_pub_to_repo') !== '0'; }catch(e){ return true; }
+}
+function setRepoSaveOnPublish(on){
+  try{ localStorage.setItem('zhp_pub_to_repo', on ? '1' : '0'); }catch(e){}
+}
+
 async function repoGetBlob(id){
   try{
     const db = await openRepoDb();
@@ -3405,6 +3414,26 @@ async function saveDownloadToRepo(c, chosen, descOf){
   renderRepo();
   if(currentPageId === 'my') renderMy();
 }
+// 自己发布的作品存进仓库。跟站内下载的分开：source 是 'mine'，
+// 落在「我的」那个 tab 里，以后还能一键上传；站内下载的那些一律不能再发布。
+// 判重在 repoAdd 里按 来源+链接 做，所以编辑后再存一次不会多出一份。
+async function saveMyWorkToRepo(title, items, collSource){
+  if(!repoReady) return 0;
+  const rows = items
+    .filter(it=>it.url.trim())
+    .map(it=>({
+      source:'mine', url: it.url.trim(), desc: (it.desc||'').trim(),
+      pack: String(title||'').trim(),
+      // 来源：这张图自己标了就用它的，没标才退回整个作品的
+      origin: (it.source || collSource || '').trim(),
+    }));
+  const fresh = await repoAdd(rows);
+  if(!fresh.length) return 0;
+  if(repoCacheImages()) cacheRepoImages(fresh.map(r=>r.url));
+  renderRepo();
+  return fresh.length;
+}
+
 // 图片本体后台慢慢抓，不挡着用户。抓不到就算了——条目还在，链接还在，
 // 只是没有离线副本，不该因此报错打扰人。
 async function cacheRepoImages(urls){
@@ -5299,6 +5328,7 @@ function openPublishSheet(){
   let allowEdit = editing ? !!editing.allowEdit : false;
   let otherChecked = editing ? !!(editing.otherPermission && editing.otherPermission.trim()) : false;
   let otherText = editing ? (editing.otherPermission || '') : '';
+  let toRepo = repoReady && repoSaveOnPublish();
   $('pubSheetMask').classList.add('open');
   draw();
 
@@ -5352,6 +5382,13 @@ function openPublishSheet(){
         ${otherChecked ? `<input class="field-input" id="pubOtherPermInput" placeholder="填写具体说明，例如：转载请注明出处" style="margin-top:8px;" value="${esc(otherText)}">` : ''}
         <p class="hint" style="margin-top:6px;">不勾选任何一项，默认视为禁止二传二改；导出文档会自动带上这份权限说明。</p>
 
+        ${repoReady ? `
+        <div class="field-label">我的仓库</div>
+        <div class="perm-list">
+          <div class="perm-row" id="pubToRepoRow"><div class="sel-check-inline ${toRepo?'on':''}">${toRepo?checkSvg:''}</div><span class="perm-label">同时存入我的仓库</span></div>
+        </div>
+        <p class="hint" style="margin-top:6px;">存成「我的」里的一个文件夹，名称就是合集名称。仓库只在本机浏览器里，别人看不到。</p>` : ''}
+
         <p class="hint" style="margin-top:12px;">共 ${count} 个表情将被${editing?'保存':'发布'}。</p>
       </div>
       <div class="sheet-footer"><button class="btn-solid" id="pubModalConfirmBtn">${editing?'确认保存':'确认发布'}</button></div>
@@ -5398,6 +5435,13 @@ function openPublishSheet(){
       });
     });
 
+    const toRepoRow = $('pubToRepoRow');
+    if(toRepoRow) toRepoRow.addEventListener('click', ()=>{
+      syncFromInputs();
+      toRepo = !toRepo;
+      setRepoSaveOnPublish(toRepo);   // 记住选择，下次发布不用再点一遍
+      draw();
+    });
     $('permRepostRow').addEventListener('click', ()=>{ syncFromInputs(); allowRepost=!allowRepost; draw(); });
     $('permEditRow').addEventListener('click', ()=>{ syncFromInputs(); allowEdit=!allowEdit; draw(); });
     $('permOtherRow').addEventListener('click', ()=>{
@@ -5424,24 +5468,27 @@ function openPublishSheet(){
         const ok = await updateCollectionRemote(editing.id, finalTitle, finalCategory, validItems, finalSource, finalTags, allowRepost, allowEdit, finalOtherPermission, pubNeedsDesc);
         $('pubModalConfirmBtn').disabled = false;
         if(!ok){ $('pubModalConfirmBtn').textContent = '确认保存'; return; }
+        // 存仓库放在远端成功之后：远端没保存上就往本地留一份，只会让人以为存过了
+        const nRepo = toRepo ? await saveMyWorkToRepo(finalTitle, validItems, finalSource) : 0;
         editingCollectionId = null;
         pubItems=[{id:uid(),url:'',desc:'',status:'idle',source:''}]; batchMode=false; batchSelected=new Set();
         pubNeedsDesc=false; renderNeedsDescCheck(); renderPubItems();
         updateEditingBanner();
         $('importPanel').classList.remove('open'); $('toggleImportBtn').classList.remove('active');
         $('pubSheetMask').classList.remove('open');
-        showToast('已保存修改');
+        showToast(nRepo ? `已保存修改，另存入仓库 ${nRepo} 张` : '已保存修改');
         await loadAppData();
         showPage('my');
       } else {
         const ok = await createCollectionRemote(finalTitle, finalCategory, validItems, finalSource, finalTags, allowRepost, allowEdit, finalOtherPermission, pubNeedsDesc);
         $('pubModalConfirmBtn').disabled = false;
         if(!ok){ $('pubModalConfirmBtn').textContent = '确认发布'; return; }
+        const nRepo = toRepo ? await saveMyWorkToRepo(finalTitle, validItems, finalSource) : 0;
         pubItems=[{id:uid(),url:'',desc:'',status:'idle',source:''}]; batchMode=false; batchSelected=new Set();
         pubNeedsDesc=false; renderNeedsDescCheck(); renderPubItems();
         $('importPanel').classList.remove('open'); $('toggleImportBtn').classList.remove('active');
         $('pubSheetMask').classList.remove('open');
-        showToast('已发布');
+        showToast(nRepo ? `已发布，另存入仓库 ${nRepo} 张` : '已发布');
         await loadAppData();
         showPage('my');
       }
