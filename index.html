@@ -1750,10 +1750,12 @@ function linkifyNotice(text){
 function notifRowHtml(n){
   if(n.type === 'admin'){
     // 管理员通知：显示正文本身，不指向任何作品，所以整行不可点，
-    // 只有正文里的链接可点
+    // 只有正文里的链接可点。
+    // 抬头写死"来自 Yoww"，不用 actor_nickname —— 那存的是发信管理员账号的昵称，
+    // 昵称没设好时露出来的就是一串 uuid，收信的人既看不懂也不该看见。
     return `<div class="row-item">
       <div class="row-main">
-        <div class="notif-admin">📣 ${esc(n.actor_nickname || '管理员')}</div>
+        <div class="notif-admin">📣 来自 Yoww</div>
         <div class="notif-body">${linkifyNotice(n.body || '')}</div>
         <div style="font-size:11px; color:var(--text-dim); margin-top:4px;">${timeAgo(n.created_at)}</div>
       </div>
