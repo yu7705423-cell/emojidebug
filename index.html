@@ -1160,6 +1160,7 @@ let favorited = new Set();
 let fonts = [];
 let posts = [];
 let notifications = [];
+let notifError = null;   // 通知加载失败的原因，为空表示这次读成功了
 let userStats = new Map(); // userId -> {nickname, avatarUrl, worksCount, totalLikes}
 
 /* ===================== auth / boot ===================== */
@@ -1709,9 +1710,12 @@ async function loadNotifications(){
       .eq('recipient_id', currentUserId).order('created_at', {ascending:false}).limit(50);
     if(error) throw error;
     notifications = data || [];
+    notifError = null;
   }catch(e){
-    // 表还没建的时候（用户还没跑 sql/notifications.sql）静默跳过，别打扰主流程
-    console.warn('加载通知失败（可能还没建 notifications 表，见 sql/notifications.sql）：', e && e.message);
+    // 加载失败不能打扰主流程，但也不能装作"一条通知都没有"——
+    // 那两种情况长得一模一样，出了问题根本查不出来。记下来，打开通知时说清楚。
+    notifError = (e && e.message) || '未知错误';
+    console.warn('加载通知失败：', notifError);
   }
   renderNotifBadge();
 }
@@ -1766,7 +1770,8 @@ function renderNotifSheet(){
   $('notifSheetBox').innerHTML = `
     <div class="sheet-head"><span class="t">通知</span><button class="icon-btn" id="notifCloseBtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button></div>
     <div class="sheet-scroll">
-      ${notifications.length ? `<div class="row-list">${notifications.map(notifRowHtml).join('')}</div>`
+      ${notifError ? `<p class="hint">通知加载失败：${esc(notifError)}</p>`
+        : notifications.length ? `<div class="row-list">${notifications.map(notifRowHtml).join('')}</div>`
         : '<p class="hint">还没有收到通知</p>'}
     </div>
   `;
