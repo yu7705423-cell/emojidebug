@@ -1,0 +1,48 @@
+plugins { id 'com.android.application' }
+
+android {
+  namespace 'io.github.yu7705423cell.yoww'
+  compileSdk 34
+
+  defaultConfig {
+    applicationId 'io.github.yu7705423cell.yoww'
+    // 29 = Android 10。写文件走 MediaStore，一个存储权限都不用申请；
+    // 再往下兼容就得把旧的 WRITE_EXTERNAL_STORAGE 那一套也写一遍，
+    // 为 2019 年以前的机器不值得。
+    minSdk 29
+    targetSdk 34
+    // CI 用 -P 覆盖；本地直接构建时用下面的默认值
+    versionCode (project.findProperty('versionCodeOverride') ?: '1').toString().toInteger()
+    versionName (project.findProperty('versionNameOverride') ?: '1.0').toString()
+  }
+
+  signingConfigs {
+    release {
+      // 由 CI 从 Secrets 里解出来；本地没有这些变量时下面的 buildTypes 会退回不签名
+      def ksPath = System.getenv('YOWW_KEYSTORE_PATH')
+      if (ksPath) {
+        storeFile file(ksPath)
+        storePassword System.getenv('YOWW_KEYSTORE_PASSWORD')
+        keyAlias System.getenv('YOWW_KEY_ALIAS') ?: 'yoww'
+        keyPassword System.getenv('YOWW_KEY_PASSWORD') ?: System.getenv('YOWW_KEYSTORE_PASSWORD')
+      }
+    }
+  }
+
+  buildTypes {
+    release {
+      minifyEnabled false
+      if (System.getenv('YOWW_KEYSTORE_PATH')) signingConfig signingConfigs.release
+    }
+  }
+
+  compileOptions {
+    sourceCompatibility JavaVersion.VERSION_17
+    targetCompatibility JavaVersion.VERSION_17
+  }
+}
+
+dependencies {
+  implementation 'androidx.appcompat:appcompat:1.7.0'
+  implementation 'androidx.webkit:webkit:1.11.0'
+}

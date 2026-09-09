@@ -1,0 +1,87 @@
+name: 打包 APK
+
+# 手动点一下就构建；打 tag（v1.0 这样）则顺便发一个 Release，
+# 群里发链接比发文件方便
+on:
+  workflow_dispatch:
+    inputs:
+      version_name:
+        description: '版本号（显示在系统的应用信息里，例如 1.0）'
+        required: false
+        default: ''
+  push:
+    tags: [ 'v*' ]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: 取出签名密钥
+        id: ks
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KS_B64" ]; then
+            echo "::error::还没有配置签名密钥。先运行「生成签名密钥」这个 workflow，"\
+                 "把产物里的 keystore.jks 转成 base64 存进 Secrets（ANDROID_KEYSTORE_BASE64），"\
+                 "密码存进 ANDROID_KEYSTORE_PASSWORD。"
+            exit 1
+          fi
+          echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/keystore.jks"
+          echo "path=$RUNNER_TEMP/keystore.jks" >> "$GITHUB_OUTPUT"
+
+      - name: 版本号
+        id: ver
+        run: |
+          NAME="${{ inputs.version_name }}"
+          if [ -z "$NAME" ]; then NAME="${GITHUB_REF_NAME#v}"; fi
+          if [ -z "$NAME" ] || [ "$NAME" = "main" ]; then NAME="1.0.${GITHUB_RUN_NUMBER}"; fi
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+
+      - name: 构建
+        working-directory: android
+        env:
+          YOWW_KEYSTORE_PATH: ${{ steps.ks.outputs.path }}
+          YOWW_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          YOWW_KEY_ALIAS: yoww
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleRelease \
+            -PversionNameOverride="${{ steps.ver.outputs.name }}" \
+            -PversionCodeOverride="${{ github.run_number }}"
+
+      - name: 重命名
+        run: |
+          mkdir -p out
+          cp android/app/build/outputs/apk/release/app-release.apk \
+             "out/Yoww-${{ steps.ver.outputs.name }}.apk"
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Yoww-apk
+          path: out/*.apk
+          if-no-files-found: error
+
+      - name: 发布 Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*.apk
+          body: |
+            装之前手机要允许「安装未知来源应用」。
+
+            界面是在线加载的，所以网站更新后 App 里直接就是新版，不用重装。
+            只有这个外壳本身改了（比如下载、选文件相关）才需要换新的 APK。
