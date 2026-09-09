@@ -52,6 +52,17 @@ android {
   }
 }
 
+// kotlin-stdlib 从 1.8 起把 jdk7 / jdk8 那两个包的类合并进了主包。
+// appcompat 的传递依赖里还挂着 1.6.21 版的旧包，于是同一批类进来两份，
+// checkDuplicateClasses 直接把构建拦下。把它俩顶到 1.8.22 —— 那个版本
+// 已经是空壳，只转手依赖主包。
+configurations.configureEach {
+  resolutionStrategy {
+    force 'org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22'
+    force 'org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22'
+  }
+}
+
 dependencies {
   implementation 'androidx.appcompat:appcompat:1.7.0'
 }
