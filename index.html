@@ -2403,6 +2403,14 @@ function openEditProfileSheet(){
 }
 
 /* ===================== line parsing (shared by import + AI) ===================== */
+// 从别的 App 复制来的整段链接，有时候换行已经被编码成 %0A / %0D%0A 了
+// （分享面板、图床的"复制全部"经常这么干）。那样粘进来整段只有一行，
+// 六条链接会被当成一条超长链接，最后只导入一张还打不开。
+// 合法链接里不会出现裸的 %0A，按它拆是安全的 —— 不按 https:// 拆，
+// 因为图片代理那种 ?url=https://... 的链接里本来就套着第二个 https://。
+function splitPastedLines(text){
+  return String(text == null ? '' : text).split(/\r\n|\r|\n|%0D%0A|%0A|%0D/i);
+}
 function parseLine(raw){
   const line = raw.trim();
   if(!line) return null;
@@ -3846,7 +3854,7 @@ function openRepoAddSheet(){
     const originVal = ($('raOrigin')?.value || '').trim();
     addPack = ($('raPack')?.value || '').trim().slice(0,20);
     // 复用发布页那套解析，格式认得的东西完全一致
-    const rows = text.split('\n').map(l=>l.trim()).filter(Boolean).map(parseLine)
+    const rows = splitPastedLines(text).map(l=>l.trim()).filter(Boolean).map(parseLine)
       .filter(r=>r.url && /^https?:\/\//i.test(r.url))
       .map(r=>({ source:'mine', url:r.url, desc:r.desc||'', folder:addFolder, pack:addPack, origin:originVal }));
     if(!rows.length){ showToast('未解析到有效链接'); return; }
@@ -4892,7 +4900,7 @@ function createImportWidget(ids){
         statsEl=$(ids.stats), totalEl=$(ids.total), listEl=$(ids.list), addBtn=$(ids.add);
 
   function parse(){
-    rows = input.value.split('\n').map(parseLine).filter(r=>r!==null);
+    rows = splitPastedLines(input.value).map(parseLine).filter(r=>r!==null);
     renderList();
   }
   function renderList(){
