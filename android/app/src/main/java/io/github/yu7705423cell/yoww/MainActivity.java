@@ -34,8 +34,24 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public class MainActivity extends AppCompatActivity {
 
-  /** 站点地址。换域名只要改这一行。 */
-  private static final String SITE = "https://yu7705423-cell.github.io/emojidebug/";
+  /**
+   * 站点地址，按顺序试。
+   *
+   * 只写死一个地址的话，域名哪天被停解析、或者 Cloudflare 抽风，全群的 App
+   * 会在同一时刻集体打不开 —— 而且只能重新打包、让所有人卸载重装才能救。
+   * 一个小概率事件配一个这么重的后果，不划算。所以留后路：第一个连不上就
+   * 自动换下一个，用户完全无感，你也有时间从容换域名。
+   */
+  private static final String[] SITES = {
+      "https://yoww2026.cn/",
+      "https://emoji.yu7705423.workers.dev/",
+  };
+  /** 主地址连不上时，最多等这么久就换下一个（有些故障不会报错，只是一直转） */
+  private static final long LOAD_TIMEOUT_MS = 12000;
+
+  private int siteIndex = 0;
+  private boolean pageOk = false;
+  private final android.os.Handler watchdog = new android.os.Handler(android.os.Looper.getMainLooper());
 
   private WebView web;
   private ValueCallback<Uri[]> filePicker;
@@ -67,15 +83,20 @@ public class MainActivity extends AppCompatActivity {
     web.setWebViewClient(new WebViewClient() {
       @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest req) {
         Uri u = req.getUrl();
-        String url = u.toString();
-        // 站内的留在 App 里；管理员通知里的红包链接那种外站地址交给系统浏览器，
-        // 否则用户点进去就再也回不到 App 了
-        if (url.startsWith(SITE)) return false;
+        // 按域名判断，不按地址前缀 —— 退到备用地址之后前缀就对不上了，
+        // 那时候点站内任何链接都会被当成外链甩去系统浏览器
+        if (isOurHost(u.getHost())) return false;
         openOutside(u);
         return true;
       }
       @Override public void onPageFinished(WebView v, String url) {
+        pageOk = true;
+        watchdog.removeCallbacksAndMessages(null);
         v.evaluateJavascript(DOWNLOAD_HOOK, null);
+      }
+      @Override public void onReceivedError(WebView v, WebResourceRequest req, android.webkit.WebResourceError err) {
+        // 只管主页面打不开的情况。某张表情图裂了不该触发换地址
+        if (req != null && req.isForMainFrame()) nextSiteOrGiveUp();
       }
     });
 
@@ -123,13 +144,53 @@ public class MainActivity extends AppCompatActivity {
       }
     });
 
-    if (saved == null) web.loadUrl(SITE);
+    if (saved == null) loadSite();
     else web.restoreState(saved);
   }
 
   @Override protected void onSaveInstanceState(Bundle out) {
     super.onSaveInstanceState(out);
     web.saveState(out);
+  }
+
+  private static boolean isOurHost(String host) {
+    if (host == null) return false;
+    for (String site : SITES) {
+      String h = Uri.parse(site).getHost();
+      if (h != null && (host.equalsIgnoreCase(h) || host.equalsIgnoreCase("www." + h))) return true;
+    }
+    return false;
+  }
+
+  private void loadSite() {
+    pageOk = false;
+    web.loadUrl(SITES[siteIndex]);
+    watchdog.removeCallbacksAndMessages(null);
+    // 有些故障不报错，只是一直转圈。超时也算这个地址不通。
+    watchdog.postDelayed(() -> { if (!pageOk) nextSiteOrGiveUp(); }, LOAD_TIMEOUT_MS);
+  }
+
+  private void nextSiteOrGiveUp() {
+    watchdog.removeCallbacksAndMessages(null);
+    if (pageOk) return;
+    if (siteIndex + 1 < SITES.length) {
+      siteIndex++;
+      toast("正在换个线路重试…");
+      loadSite();
+      return;
+    }
+    // 都试过了。留一个能点的重试页，比停在一片空白上强
+    siteIndex = 0;
+    web.loadDataWithBaseURL(null,
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+      + "<div style=\"font:14px -apple-system,system-ui,sans-serif;color:#333;"
+      + "text-align:center;padding:80px 28px;line-height:1.9\">"
+      + "<div style='font-size:22px;margin-bottom:10px'>Yoww</div>"
+      + "连不上服务器<br><span style='color:#999;font-size:12px'>检查一下网络，或者稍后再试</span>"
+      + "<div style='margin-top:26px'><a href='#' onclick='YowwHost.retry();return false' "
+      + "style='display:inline-block;padding:11px 30px;background:#111;color:#fff;"
+      + "border-radius:8px;text-decoration:none;font-size:13px'>重试</a></div></div>",
+        "text/html", "utf-8", null);
   }
 
   private void openOutside(Uri u) {
@@ -185,6 +246,10 @@ public class MainActivity extends AppCompatActivity {
     + "})();";
 
   private class Bridge {
+    @JavascriptInterface public void retry() {
+      runOnUiThread(MainActivity.this::loadSite);
+    }
+
     @JavascriptInterface public String beginSave(String name, String mime) {
       try {
         ContentValues v = new ContentValues();
