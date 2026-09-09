@@ -5687,7 +5687,7 @@ function avatarFrameUiHtml(p){
         <img class="af-layer af-frame-layer" id="${p}FrLayer" alt="" hidden>
       </div>
       <p class="af-hint">先选下面要调哪一层，再在图上拖动、用滑块缩放，两层各调各的。<br>圆形 / 方形只裁<b>你的头像</b>那一块，头像框整张显示、可以随便超出头像。</p>
-      <p class="af-hint" id="${p}GifNote" hidden>这是动图：预览里会动，但保存下来的合成图是静态的（只有第一帧）。</p>
+      <p class="af-hint" id="${p}GifNote" hidden>这是动图（GIF / 动态 WebP / APNG）：预览里会动，但保存下来的合成图是静态的，只有第一帧。</p>
       <div class="type-toggle" id="${p}Target" style="margin-top:12px;">
         <button type="button" data-af="frame" class="active">拖动头像框</button>
         <button type="button" data-af="avatar">拖动头像</button>
@@ -5709,6 +5709,47 @@ function avatarFrameUiHtml(p){
 
 
 const isGifUrl = u => /^data:image\/gif/i.test(u||'') || /\.gif($|[?#])/i.test(u||'');
+
+// 动图判定看文件头，不看后缀。后缀靠不住：.webp 里静态和动态都有，
+// 只认 .gif 的话动态 webp 一律漏报（"没提示，那应该能动吧"），
+// 而把 .webp 一并算进去又会把大量静态图误报成动图。
+function hasMultipleFrames(b){
+  if(!b || b.length < 16) return false;
+  const at = (i, sig) => {
+    for(let k=0;k<sig.length;k++) if(b[i+k] !== sig.charCodeAt(k)) return false;
+    return true;
+  };
+  const find = (sig, from, to) => {
+    const end = Math.min(b.length, to) - sig.length;
+    for(let i=from;i<=end;i++) if(at(i,sig)) return i;
+    return -1;
+  };
+  // GIF：每一帧前面都有一个图形控制扩展 21 F9 04，出现两次以上就是动的
+  if(at(0,'GIF8')){
+    let n = 0;
+    for(let i=0;i<b.length-2;i++){
+      if(b[i]===0x21 && b[i+1]===0xF9 && b[i+2]===0x04 && ++n > 1) return true;
+    }
+    return false;
+  }
+  // WebP：只有扩展格式带 ANIM 块的才是动图，块就紧跟在文件头后面
+  if(at(0,'RIFF') && at(8,'WEBP')) return find('ANIM', 12, 128) >= 0;
+  // APNG：acTL 块，按规范必须排在 IDAT 之前
+  if(b[0]===0x89 && at(1,'PNG')){
+    const idat = find('IDAT', 8, b.length);
+    return find('acTL', 8, idat < 0 ? b.length : idat) >= 0;
+  }
+  return false;
+}
+async function isAnimatedImage(url){
+  if(!url) return false;
+  const blob = await fetchImageBlob(url);
+  // 图床不给跨域时读不到字节，退回后缀 —— 起码 gif 还认得出来
+  if(!blob) return isGifUrl(url);
+  try{
+    return hasMultipleFrames(new Uint8Array(await blob.arrayBuffer()));
+  }catch(e){ return isGifUrl(url); }
+}
 
 function setupAvatarFrame(url, title, p){
   const cv = $(p+'Canvas'), ctx = cv.getContext('2d'), stage = $(p+'Stage');
@@ -5781,8 +5822,14 @@ function setupAvatarFrame(url, title, p){
     }
   }
 
-  function refreshGifNote(){
-    gifNote.hidden = !(isGifUrl(url) || isGifUrl(st.avatarSrc));
+  // 判定要读图片字节，是异步的；期间可能又换了一次头像，
+  // 用序号把过期的那次结果丢掉，免得旧结果盖掉新结果
+  let noteToken = 0;
+  async function refreshGifNote(){
+    const mine = ++noteToken;
+    const anim = await isAnimatedImage(url) || await isAnimatedImage(st.avatarSrc);
+    if(mine !== noteToken) return;
+    gifNote.hidden = !anim;
   }
 
   (async ()=>{
