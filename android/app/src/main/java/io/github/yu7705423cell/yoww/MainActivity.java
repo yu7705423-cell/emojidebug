@@ -8,7 +8,6 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.provider.MediaStore;
 import android.util.Base64;
-import android.view.View;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
@@ -106,7 +105,6 @@ public class MainActivity extends AppCompatActivity {
       try {
         DownloadManager.Request r = new DownloadManager.Request(Uri.parse(url));
         r.setMimeType(mime);
-        r.allowScanningByMediaScanner();
         r.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
         r.setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS,
             android.webkit.URLUtil.guessFileName(url, disposition, mime));

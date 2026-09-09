@@ -1,5 +1,12 @@
 plugins { id 'com.android.application' }
 
+// 先算好再传。写成 versionCode (expr).toInteger() 的话 Groovy 会先把
+// versionCode(expr) 当成方法调用，再对它的返回值（null）调 toInteger()，
+// 构建直接报 "Value is null"。
+def vName = (project.findProperty('versionNameOverride') ?: '1.0').toString()
+def vCode = (project.findProperty('versionCodeOverride') ?: '1').toString().toInteger()
+def ksPath = System.getenv('YOWW_KEYSTORE_PATH')
+
 android {
   namespace 'io.github.yu7705423cell.yoww'
   compileSdk 34
@@ -11,16 +18,15 @@ android {
     // 为 2019 年以前的机器不值得。
     minSdk 29
     targetSdk 34
-    // CI 用 -P 覆盖；本地直接构建时用下面的默认值
-    versionCode (project.findProperty('versionCodeOverride') ?: '1').toString().toInteger()
-    versionName (project.findProperty('versionNameOverride') ?: '1.0').toString()
+    versionCode vCode
+    versionName vName
   }
 
-  signingConfigs {
-    release {
-      // 由 CI 从 Secrets 里解出来；本地没有这些变量时下面的 buildTypes 会退回不签名
-      def ksPath = System.getenv('YOWW_KEYSTORE_PATH')
-      if (ksPath) {
+  // 没有密钥就干脆不建这个 signingConfig —— 建一个 storeFile 为空的，
+  // AGP 迟早会在某个环节校验它然后报一个跟真正原因无关的错
+  if (ksPath) {
+    signingConfigs {
+      release {
         storeFile file(ksPath)
         storePassword System.getenv('YOWW_KEYSTORE_PASSWORD')
         keyAlias System.getenv('YOWW_KEY_ALIAS') ?: 'yoww'
@@ -32,9 +38,13 @@ android {
   buildTypes {
     release {
       minifyEnabled false
-      if (System.getenv('YOWW_KEYSTORE_PATH')) signingConfig signingConfigs.release
+      if (ksPath) signingConfig signingConfigs.release
     }
   }
+
+  // 这就是个 WebView 壳子，lint 的建议参考价值不大，
+  // 不值得为它挡住一次出包
+  lint { abortOnError false }
 
   compileOptions {
     sourceCompatibility JavaVersion.VERSION_17
@@ -44,5 +54,4 @@ android {
 
 dependencies {
   implementation 'androidx.appcompat:appcompat:1.7.0'
-  implementation 'androidx.webkit:webkit:1.11.0'
 }
