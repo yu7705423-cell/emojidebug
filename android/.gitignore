@@ -3,3 +3,6 @@ build/
 local.properties
 *.jks
 *.keystore
+
+# 加密后的签名密钥要跟着仓库走，别被上面的 *.jks 规则带上
+!keystore.jks.enc

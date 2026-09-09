@@ -20,6 +20,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
 
       - uses: actions/setup-java@v4
         with:
@@ -28,17 +30,47 @@ jobs:
 
       - uses: android-actions/setup-android@v3
 
-      - name: 取出签名密钥
+      # 签名密钥全程留在 GitHub 上。加密后的那份提交进仓库 ——
+      # 仓库是公开的，所以绝不能存明文；解密只在构建时、在跑机器上发生。
+      # 你要做的只有一件事：设一个 ANDROID_KEYSTORE_PASSWORD。
+      - name: 准备签名密钥
         id: ks
         env:
-          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          PW: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
-          if [ -z "$KS_B64" ]; then
+          set -euo pipefail
+          if [ -z "${PW:-}" ]; then
+            echo "::notice::还没有设置 ANDROID_KEYSTORE_PASSWORD，这次只做编译检查，不出安装包。"
             echo "signed=no" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/keystore.jks"
-          echo "path=$RUNNER_TEMP/keystore.jks" >> "$GITHUB_OUTPUT"
+          ENC=android/keystore.jks.enc
+          OUT="$RUNNER_TEMP/keystore.jks"
+          if [ -f "$ENC" ]; then
+            openssl enc -d -aes-256-cbc -pbkdf2 -iter 1000000 \
+              -in "$ENC" -out "$OUT" -pass env:PW \
+              || { echo "::error::密钥解不开 —— ANDROID_KEYSTORE_PASSWORD 跟当初生成时填的不是同一个。"; exit 1; }
+            echo "用的是仓库里已有的签名密钥"
+          else
+            if [ "${{ github.ref_type }}" = "tag" ]; then
+              echo "::error::还没有签名密钥。先在 main 分支手动跑一次这个 workflow 把密钥建出来，再打 tag。"
+              exit 1
+            fi
+            echo "仓库里还没有密钥，现在建一把"
+            keytool -genkeypair -v -keystore "$OUT" -alias yoww \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "$PW" -keypass "$PW" \
+              -dname "CN=Yoww, OU=Yoww, O=Yoww, L=-, ST=-, C=CN"
+            openssl enc -aes-256-cbc -pbkdf2 -iter 1000000 -salt \
+              -in "$OUT" -out "$ENC" -pass env:PW
+            git config user.name  'github-actions[bot]'
+            git config user.email 'github-actions[bot]@users.noreply.github.com'
+            git add "$ENC"
+            git commit -m '签名密钥（已加密，只有 ANDROID_KEYSTORE_PASSWORD 能解开）'
+            git push origin HEAD:"${{ github.ref_name }}"
+            echo "::notice::密钥已建好并加密存进仓库。密码一定要自己记牢：丢了就再也签不出能覆盖安装的新版本。"
+          fi
+          echo "path=$OUT" >> "$GITHUB_OUTPUT"
           echo "signed=yes" >> "$GITHUB_OUTPUT"
 
       - name: 版本号
@@ -72,9 +104,8 @@ jobs:
           if [ "${{ steps.ks.outputs.signed }}" != "yes" ]; then
             echo "### 构建通过，但还没有可分发的安装包" >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "还没配置签名密钥，所以这次只做了编译检查。" >> "$GITHUB_STEP_SUMMARY"
-            echo "先运行「生成签名密钥」，把产物存成 Secrets：" >> "$GITHUB_STEP_SUMMARY"
-            echo "\`ANDROID_KEYSTORE_BASE64\` 和 \`ANDROID_KEYSTORE_PASSWORD\`，再回来跑这个。" >> "$GITHUB_STEP_SUMMARY"
+            echo "去 Settings → Secrets and variables → Actions 加一条 \`ANDROID_KEYSTORE_PASSWORD\`，" >> "$GITHUB_STEP_SUMMARY"
+            echo "再回来跑一次，就会自动建密钥并出包。" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           mkdir -p out
