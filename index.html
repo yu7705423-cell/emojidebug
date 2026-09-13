@@ -695,6 +695,7 @@
         <p class="hint">先把要发布的表情整理好；合集名称和分类会在最后点「发布」时再填写。</p>
         <div class="row-list" id="pubItems"></div>
         <div class="btn-row">
+          <button class="btn-outline" id="pubPickBtn"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.5"/><path d="M21 16l-5-5-4 4-2-2-4 4"/></svg>从相册选图</button>
           <button class="btn-outline" id="pubAddRowBtn">＋ 添加一条</button>
           <button class="btn-outline" id="pubCopyBtn">复制列表</button>
         </div>
@@ -5595,6 +5596,17 @@ function refreshRowUI(it){
     if(d && document.activeElement !== d && d.value !== it.desc) d.value = it.desc;
   });
 }
+// 一个包平均三四十张，所以这里一定要能一次多选 —— 一张一张点会让人放弃
+$('pubPickBtn').addEventListener('click', async ()=>{
+  const { urls } = await upWithButton($('pubPickBtn'), true);
+  if(!urls.length) return;
+  // 列表末尾如果是一条什么都没填的空行（刚进页面时默认就有一条），先用掉它，
+  // 免得传完之后中间夹着一条空的
+  const tail = pubItems[pubItems.length-1];
+  if(tail && !tail.url.trim() && !tail.desc.trim()) pubItems.pop();
+  urls.forEach(u=>pubItems.push({id:uid(), url:u, desc:'', status:'idle', source:''}));
+  renderPubItems();
+});
 $('pubAddRowBtn').addEventListener('click', ()=>{ pubItems.push({id:uid(),url:'',desc:'',status:'idle',source:''}); renderPubItems(); });
 $('aiAddRowBtn').addEventListener('click', ()=>{ pubItems.push({id:uid(),url:'',desc:'',status:'idle',source:''}); renderPubItems(); });
 
@@ -6767,7 +6779,10 @@ function openPostEditor(kind, existing){
     } else if(st.kind === 'avatar_frame'){
       fields = `<div class="field-label">头像框图片链接</div>
         <input class="field-input" id="peUrl" placeholder="https://…  建议透明底 PNG" value="${esc(st.url)}">
-        <div class="btn-row" style="margin-top:10px;"><button type="button" class="btn-outline" id="peTryBtn">试戴看看</button></div>
+        <div class="btn-row" style="margin-top:10px;">
+          <button type="button" class="btn-outline" id="pePickBtn"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.5"/><path d="M21 16l-5-5-4 4-2-2-4 4"/></svg>选图上传</button>
+          <button type="button" class="btn-outline" id="peTryBtn">试戴看看</button>
+        </div>
         <p class="field-help">透明底的 PNG 效果最好，方形图。发之前先自己试戴一下，确认框能套上、图床也取得到图。别人可以套自己的头像预览、也能下载这张原图。</p>`;
     } else if(st.kind === 'tutorial'){
       fields = `<div class="field-label">正文</div>
@@ -6828,6 +6843,14 @@ function openPostEditor(kind, existing){
       draw(); if(st.otherChecked){ const el=$('peOther'); if(el) el.focus(); }
     });
     const other = $('peOther'); if(other) other.addEventListener('input', e=>{ st.otherText = e.target.value; });
+    const pickBtn = $('pePickBtn');
+    if(pickBtn) pickBtn.addEventListener('click', async ()=>{
+      sync();                                   // 选图会重画这一块，先把已经敲进去的东西收回来
+      const { urls } = await upWithButton(pickBtn, false);
+      if(!urls.length) return;
+      st.url = urls[0];
+      draw();
+    });
     const tryBtn = $('peTryBtn');
     if(tryBtn) tryBtn.addEventListener('click', ()=>{
       sync();                                   // 先把刚敲进去的链接收回来
@@ -7289,6 +7312,155 @@ function handleDeepLink(){
   }
 }
 
+/* ===================== 选图上传 =====================
+   在这之前，发这个站要先自己找个图床把图转成链接。大部分人卡在这一步。
+   这里做的事：在手机上把图压小，传到我们自己的 R2，换回一个链接填进原来
+   那个输入框。贴链接那条路一个字没动 —— 想保原图、或者图本来就在别处的人
+   照旧，两条路并存。 */
+const UP_ENDPOINT   = '/api/upload';       // 跟网站同源，不牵扯跨域
+const UP_MAX_EDGE   = 1200;                // 长边上限。表情实际显示也就两三百像素，留足余量
+const UP_QUALITY    = 0.85;
+const UP_MAX_BYTES  = 12 * 1024 * 1024;    // 跟 Worker 那边的上限对齐
+const UP_TYPES      = ['image/png','image/jpeg','image/webp','image/gif'];
+
+// 动图绝对不能压：压缩要把图画到画布上再导出，而画布只拿得到一帧 ——
+// 压完动态表情就变成一张静止的图了。这里按文件头认，不看后缀，
+// 因为从相册出来的文件名经常是 IMG_1234 这种什么都看不出来的东西。
+async function upIsAnimated(file){
+  try{
+    const head = new Uint8Array(await file.slice(0, 262144).arrayBuffer());
+    return hasMultipleFrames(head);
+  }catch(e){ return false; }   // 认不出来就当静图走压缩，最坏是压一张本来就静的图
+}
+
+/**
+ * 把一个文件变成「可以上传的东西」。
+ * 返回 {blob, type, skipped} —— skipped 说明为什么没压，用来给用户一句交代。
+ */
+async function upPrepare(file){
+  const original = { blob:file, type:file.type, skipped:null };
+
+  if(await upIsAnimated(file)) return Object.assign(original, { skipped:'动图，保持原样' });
+
+  let bmp;
+  try{
+    // from-image：手机拍的照片经常带旋转信息，不认的话传上去是躺倒的
+    bmp = await createImageBitmap(file, { imageOrientation:'from-image' });
+  }catch(e){
+    return Object.assign(original, { skipped:'读不出尺寸，保持原样' });
+  }
+
+  const scale = Math.min(1, UP_MAX_EDGE / Math.max(bmp.width, bmp.height));
+  const w = Math.max(1, Math.round(bmp.width * scale));
+  const h = Math.max(1, Math.round(bmp.height * scale));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  canvas.getContext('2d').drawImage(bmp, 0, 0, w, h);
+  bmp.close && bmp.close();
+
+  // WebP 而不是 JPEG：表情和头像框大量是透明底的，JPEG 会把透明处压成黑块
+  let out = await new Promise(res => canvas.toBlob(res, 'image/webp', UP_QUALITY));
+  if(!out) out = await new Promise(res => canvas.toBlob(res, 'image/png'));
+  if(!out) return Object.assign(original, { skipped:'压缩失败，保持原样' });
+
+  // 本来就小、本来就优化过的图，压完反而更大。那就别压了 ——
+  // 目的是省空间和流量，不是为了压而压
+  if(out.size >= file.size) return Object.assign(original, { skipped:'原图本来就更小' });
+
+  return { blob:out, type:out.type, skipped:null };
+}
+
+// 真正发出去的那一步。压缩、进度、错误汇总都在外面，这里只管一次请求。
+async function upSend(blob, type){
+  if(blob.size > UP_MAX_BYTES) throw new Error('压缩之后还是超过 12 MB，传不了');
+  const { data:{ session } } = await sb.auth.getSession();
+  if(!session) throw new Error('登录状态失效了，刷新一下再试');
+
+  const res = await fetch(UP_ENDPOINT, {
+    method:'POST',
+    headers:{ 'content-type':type, 'authorization':'Bearer '+session.access_token },
+    body: blob,
+  });
+
+  // 上传服务没部署的时候，静态站会把 404 页面原样返回，不是 JSON。
+  // 不单独认一下的话，用户看到的是一句没头没脑的「Unexpected token <」
+  if(res.status === 404 || res.status === 405){
+    throw new Error('这个站点没有开上传服务，请到正式站上传');
+  }
+  let data;
+  try{ data = await res.json(); }
+  catch(e){ throw new Error(`上传失败（${res.status}）`); }
+  if(!res.ok || !data.ok) throw new Error(data.error || `上传失败（${res.status}）`);
+  return data.url;
+}
+
+/**
+ * 弹一个文件选择框，把选中的图挨个传掉。
+ * onProgress(已完成, 总数, 当前文件名) 用来让界面别看着像卡死了 ——
+ * 一个包动不动三四十张，没有进度的话用户会以为没反应，然后反复点。
+ */
+function upPickFiles(multiple, onProgress){
+  return new Promise(resolve=>{
+    let picked = false;
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = UP_TYPES.join(',');
+    if(multiple) input.multiple = true;
+    input.style.display = 'none';
+    document.body.appendChild(input);
+
+    input.addEventListener('change', async ()=>{
+      picked = true;                       // 同步置上，别让下面的兜底抢先收场
+      // FileList 是活的：下面一 await，它就可能被清空。先拍一份快照。
+      const files = Array.from(input.files || []);
+      input.remove();
+      if(!files.length) return resolve({ urls:[], errors:[], notes:[] });
+
+      const urls = [], errors = [], notes = [];
+      for(let i=0;i<files.length;i++){
+        const f = files[i];
+        if(onProgress) onProgress(i, files.length, f.name);
+        try{
+          if(!UP_TYPES.includes(f.type)) throw new Error('只收 png / jpg / webp / gif');
+          const { blob, type, skipped } = await upPrepare(f);
+          if(skipped) notes.push(`${f.name}：${skipped}`);
+          urls.push(await upSend(blob, type));
+        }catch(e){
+          errors.push(`${f.name}：${e.message || '上传失败'}`);
+        }
+      }
+      if(onProgress) onProgress(files.length, files.length, '');
+      resolve({ urls, errors, notes });
+    }, { once:true });
+
+    // 用户直接把选择框关掉的话，change 永远不会来，这个 input 就一直留在
+    // DOM 里。没有可靠的「取消」事件，所以靠窗口重新拿到焦点来兜底。
+    // picked 这个标记是必须的：选完文件时焦点也会回来，而 change 是随后才到的。
+    // 光看「input 还在不在」会有一个缝 —— 文件多、机器慢时 change 可能晚于这 500ms，
+    // 那就会先按「取消」收场，然后 change 照样把图传上去，传完没人要。
+    window.addEventListener('focus', ()=>{
+      setTimeout(()=>{ if(!picked){ input.remove(); resolve({ urls:[], errors:[], notes:[] }); } }, 800);
+    }, { once:true });
+
+    input.click();
+  });
+}
+
+// 上传过程中占住按钮，顺便把「第几张 / 共几张」写在上面
+async function upWithButton(btn, multiple){
+  const label = btn.textContent;
+  btn.disabled = true;
+  const r = await upPickFiles(multiple, (done, total)=>{
+    btn.textContent = done >= total ? '处理中…' : `上传中 ${done+1}/${total}`;
+  });
+  btn.disabled = false; btn.textContent = label;
+  if(r.errors.length) showToast(r.errors.length === 1 ? r.errors[0] : `${r.errors.length} 张没传上：${r.errors[0]}`);
+  else if(r.urls.length) showToast(`已上传 ${r.urls.length} 张`);
+  if(r.notes.length) console.info('上传备注：', r.notes);
+  return r;
+}
+
 /* ===================== 作品下的私密留言 =====================
    这里跟常见的评论区是两回事：一件作品下面挂的不是一条公共的评论流，
    而是「作者 ↔ 每个人」一段一段互不可见的私聊。作者看得到全部，
@@ -7555,9 +7727,10 @@ function openWishComposer(){
       <input class="field-input" id="wcTitle" maxlength="60" placeholder="一句话说清楚，比如「求一套猫猫表情包」">
       <div class="field-label">详细说明（可选）</div>
       <textarea class="field-input" id="wcBody" maxlength="1000" style="min-height:90px;" placeholder="补充一点细节：什么风格、在哪见过、试过什么办法…"></textarea>
-      <div class="field-label">配图链接（可选）</div>
+      <div class="field-label">配图（可选）</div>
       <input class="field-input" id="wcImage" placeholder="http:// 或 https:// 开头的图片链接">
-      <p class="field-help">有截图的话贴一张，别人更容易认出来。图片是直接引用这个链接，不会上传到我们这里。</p>
+      <div class="btn-row"><button type="button" class="btn-outline" id="wcPickBtn"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.5"/><path d="M21 16l-5-5-4 4-2-2-4 4"/></svg>从相册选图</button></div>
+      <p class="field-help">有截图的话贴一张，别人更容易认出来。选图会自动压缩并转成链接；想保持原图就自己转好链接贴上面。</p>
       <p class="hint" id="wcError" style="display:none; color:#c0392b; margin-top:10px;"></p>
       <p class="hint" style="margin-top:12px;">许愿是公开的，所有人都能看到，也都能回复。发完之后标题和正文就不能再改了 —— 不然底下的回复会对不上原来问的是什么。</p>
     </div>
@@ -7565,6 +7738,10 @@ function openWishComposer(){
   $('wishSheetMask').classList.add('open');
   const fail = msg => { const e=$('wcError'); e.textContent=msg; e.style.display='block'; };
   $('wcClose').addEventListener('click', ()=>$('wishSheetMask').classList.remove('open'));
+  $('wcPickBtn').addEventListener('click', async ()=>{
+    const { urls } = await upWithButton($('wcPickBtn'), false);
+    if(urls.length) $('wcImage').value = urls[0];
+  });
   $('wcSubmit').addEventListener('click', async ()=>{
     const title = $('wcTitle').value.trim();
     const body = $('wcBody').value.trim();
