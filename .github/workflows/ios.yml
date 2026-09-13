@@ -1,0 +1,97 @@
+name: Build iOS IPA (unsigned)
+
+# 这个包不签名。谁要谁自己签（AltStore / Sideloadly / TrollStore 之类）。
+# 不签名就构建不需要任何证书和密钥，所以这个 workflow 里没有任何 secret。
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'ios/**'
+      - '.github/workflows/ios.yml'
+
+jobs:
+  build:
+    # iOS 只能在 macOS 上编译，这是苹果的限制，不是能绕的事
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 选一个明确的 Xcode 版本
+        # 不固定的话，runner 镜像换 Xcode 时构建会毫无征兆地变样
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: 装 XcodeGen
+        run: brew install xcodegen
+
+      - name: 生成 .xcodeproj
+        working-directory: ios
+        run: xcodegen generate
+
+      - name: 编译（不签名）
+        working-directory: ios
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Yoww.xcodeproj \
+            -scheme Yoww \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            ENABLE_BITCODE=NO \
+            build | xcpretty || xcodebuild \
+            -project Yoww.xcodeproj \
+            -scheme Yoww \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            ENABLE_BITCODE=NO \
+            build
+
+      - name: 打成 .ipa
+        working-directory: ios
+        run: |
+          set -e
+          APP="build/Build/Products/Release-iphoneos/Yoww.app"
+          test -d "$APP" || { echo "没找到 $APP"; find build -name '*.app' -maxdepth 6; exit 1; }
+          # .ipa 就是一个 zip，里面必须有一层叫 Payload 的目录 —— 名字是固定的，
+          # 签名工具和 iOS 都按这个找
+          rm -rf Payload && mkdir Payload
+          cp -R "$APP" Payload/
+          # 不签名的包里不该留签名残留，留着有些签名工具会报错
+          rm -rf Payload/Yoww.app/_CodeSignature
+          zip -qry Yoww-unsigned.ipa Payload
+          rm -rf Payload
+          echo "---- 包内容 ----"
+          unzip -l Yoww-unsigned.ipa | head -30
+          ls -lh Yoww-unsigned.ipa
+
+      - name: 自检
+        working-directory: ios
+        run: |
+          set -e
+          unzip -o -q Yoww-unsigned.ipa -d _check
+          test -f "_check/Payload/Yoww.app/Yoww"        || { echo "没有可执行文件"; exit 1; }
+          test -f "_check/Payload/Yoww.app/Info.plist"  || { echo "没有 Info.plist"; exit 1; }
+          echo "Bundle ID: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' _check/Payload/Yoww.app/Info.plist)"
+          echo "版本:      $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' _check/Payload/Yoww.app/Info.plist)"
+          # 相册/相机那几条缺一个，用户点上传时是闪退不是提示
+          for k in NSPhotoLibraryUsageDescription NSCameraUsageDescription; do
+            /usr/libexec/PlistBuddy -c "Print :$k" _check/Payload/Yoww.app/Info.plist >/dev/null \
+              || { echo "Info.plist 少了 $k"; exit 1; }
+          done
+          # 图标进包了没有。asset catalog 编译失败是静默的，出来就是白图标
+          test -f "_check/Payload/Yoww.app/Assets.car" || { echo "图标没编进去"; exit 1; }
+          echo "自检通过"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Yoww-unsigned-ipa
+          path: ios/Yoww-unsigned.ipa
+          if-no-files-found: error

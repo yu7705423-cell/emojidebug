@@ -1,0 +1,33 @@
+# XcodeGen 的工程描述。
+#
+# 为什么不直接把 .xcodeproj 放进仓库：那个文件是一大坨机器生成的 pbxproj，
+# 手写会错、看 diff 也看不懂。这里描述"要什么"，CI 上现生成一份。
+name: Yoww
+options:
+  bundleIdPrefix: io.github.yu7705423cell
+  deploymentTarget:
+    iOS: "15.0"
+  createIntermediateGroups: true
+
+targets:
+  Yoww:
+    type: application
+    platform: iOS
+    sources:
+      - path: Yoww
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.yu7705423cell.yoww
+        PRODUCT_NAME: Yoww
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        INFOPLIST_FILE: Yoww/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        TARGETED_DEVICE_FAMILY: "1,2"     # iPhone + iPad
+        SWIFT_VERSION: "5.0"
+        # 这个包是发出去给人自己签的，所以这里一律不签。
+        # 留着自动签名的话，CI 上没有证书会直接构建失败。
+        CODE_SIGN_IDENTITY: ""
+        CODE_SIGNING_REQUIRED: "NO"
+        CODE_SIGNING_ALLOWED: "NO"
+        CODE_SIGN_STYLE: Manual

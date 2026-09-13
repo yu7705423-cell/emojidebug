@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key><string>zh_CN</string>
+  <key>CFBundleDisplayName</key><string>Yoww</string>
+  <key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
+  <key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>CFBundleName</key><string>$(PRODUCT_NAME)</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
+  <key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
+  <key>LSRequiresIPhoneOS</key><true/>
+
+  <!-- 这几句缺一个，用户点到对应的入口时应用会直接闪退，不是弹窗提示。
+       网页里 <input type=file> 会让系统给出"照片图库 / 拍照 / 浏览"三个选项，
+       前两个分别要下面这两句。 -->
+  <key>NSPhotoLibraryUsageDescription</key>
+  <string>选择表情图片上传时需要访问相册。</string>
+  <key>NSCameraUsageDescription</key>
+  <string>直接拍一张图上传时需要使用相机。</string>
+  <key>NSPhotoLibraryAddUsageDescription</key>
+  <string>保存表情图片到相册时需要这个权限。</string>
+
+  <key>UILaunchScreen</key>
+  <dict/>
+  <key>UISupportedInterfaceOrientations</key>
+  <array>
+    <string>UIInterfaceOrientationPortrait</string>
+    <string>UIInterfaceOrientationLandscapeLeft</string>
+    <string>UIInterfaceOrientationLandscapeRight</string>
+  </array>
+  <key>UISupportedInterfaceOrientations~ipad</key>
+  <array>
+    <string>UIInterfaceOrientationPortrait</string>
+    <string>UIInterfaceOrientationPortraitUpsideDown</string>
+    <string>UIInterfaceOrientationLandscapeLeft</string>
+    <string>UIInterfaceOrientationLandscapeRight</string>
+  </array>
+  <!-- 状态栏样式在代码里按页面底色算，不用系统那套 -->
+  <key>UIViewControllerBasedStatusBarAppearance</key><true/>
+</dict>
+</plist>
