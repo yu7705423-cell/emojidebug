@@ -7,6 +7,6 @@
 set -e
 rm -rf dist
 mkdir -p dist
-cp index.html jszip.min.js html2canvas.min.js supabase.min.js dist/
+cp index.html restore.html jszip.min.js html2canvas.min.js supabase.min.js dist/
 echo "已放入 dist/："
 ls -1 dist
