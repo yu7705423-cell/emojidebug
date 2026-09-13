@@ -7318,8 +7318,12 @@ function handleDeepLink(){
    那个输入框。贴链接那条路一个字没动 —— 想保原图、或者图本来就在别处的人
    照旧，两条路并存。 */
 const UP_ENDPOINT   = '/api/upload';       // 跟网站同源，不牵扯跨域
-const UP_MAX_EDGE   = 1200;                // 长边上限。表情实际显示也就两三百像素，留足余量
-const UP_QUALITY    = 0.85;
+// 长边上限和质量。一开始定的是 1200 / 0.85，按"表情显示出来也就两三百像素"
+// 算的，但那个算法只考虑了在站内看 —— 大家是要把图存下来发微信的，存下来的
+// 那张才是成品。而且手机截图是竖的，长边卡 1200 会把宽压到 555，截图里的小字
+// 就糊了。存储有 10 GB 免费额度、预计只用得上一两 GB，没有理由省这个。
+const UP_MAX_EDGE   = 1600;
+const UP_QUALITY    = 0.90;
 const UP_MAX_BYTES  = 12 * 1024 * 1024;    // 跟 Worker 那边的上限对齐
 const UP_TYPES      = ['image/png','image/jpeg','image/webp','image/gif'];
 
