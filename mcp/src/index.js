@@ -18,7 +18,7 @@ const NAME = 'yoww';
 // 每次改动都往上加一。线上到底跑的是不是最新的，
 // 打开 /health 看这个数字就知道 —— Cloudflare 后台显示的是它自己的版本号，
 // 跟提交号对不上，别拿那个判断。
-const VERSION = '15';
+const VERSION = '16';
 const SITE = 'https://yoww2026.cn';
 
 // 我们支持的协议版本，新的排前面。客户端报的版本认识就照它的来，
@@ -272,15 +272,23 @@ function sameSig(a, b) {
 async function proxyUrl(env, raw, origin) {
   const url = String(raw == null ? '' : raw).trim();
   if (!/^https?:\/\//i.test(url)) return url;
-  // 自家图床不用中转
+  // 自家图床本来不用中转（没有防盗链，中转纯属浪费流量）。
+  // 但我们上传时把图统一压成了 WebP，地址就是 .webp 结尾 ——
+  // 不少前端判断"是不是图片"用的是老白名单，里面没有 webp，
+  // 一看后缀不认识就当纯文本。所以自家的 webp 也绕一下中转，
+  // 换一个它认得的后缀；非 webp 的照旧直连，不花这个流量。
   const base = env.IMG_BASE || '';
-  if (base && url.startsWith(base)) return url;
+  if (base && url.startsWith(base) && !/\.webp(\?|#|$)/i.test(url)) return url;
   const payload = b64u.enc(url);
   // 强制 https：本地跑的时候 origin 可能是 http，那种地址贴进 https 的前端
   // 会被当成混合内容直接拦掉，又是一次"图加载失败"
   const secure = origin.replace(/^http:/, 'https:');
-  // 结尾带个扩展名，有些渲染器按扩展名才认它是图
-  const ext = (/\.(png|jpe?g|gif|webp|bmp|avif)(\?|#|$)/i.exec(url) || [, 'webp'])[1].toLowerCase();
+  // 结尾带个扩展名，有些渲染器按扩展名才认它是图。
+  // 认不出原后缀时默认 png，不要默认 webp —— 不少前端判断"是不是图片"
+  // 用的是老白名单（png|jpe?g|gif），里面根本没有 webp，
+  // 一看后缀不认识就当纯文本，什么都不显示。
+  // 后缀只是给它看的，真正的类型由我们回的 content-type 决定，所以不会出错。
+  const ext = (/\.(png|jpe?g|gif|bmp|avif)(\?|#|$)/i.exec(url) || [, 'png'])[1].toLowerCase();
   return `${secure}/i/${await sign(env, payload)}/${payload}.${ext}`;
 }
 
