@@ -2,11 +2,21 @@
   // Yoww 的 MCP 接口。跟主站是两个完全独立的 Worker ——
   // 这边出任何问题都影响不到 yoww2026.cn。
   //
-  // 部署：在这个目录里跑 `npx wrangler deploy`
-  // 然后到 Cloudflare 后台给这个 Worker 绑一个自定义域名 mcp.yoww2026.cn
+  // 部署：在这个目录里跑 `npx wrangler deploy`，就这一条命令，
+  // 域名也一起绑好了，不用再去后台点。
   "name": "yoww-mcp",
   "main": "src/index.js",
   "compatibility_date": "2026-09-09",
+
+  // 自定义域名写在这里，deploy 的时候 wrangler 自己去建 DNS 记录和绑定。
+  // 写死成 mcp.yoww2026.cn 是为了跟站里那个页面、还有 Worker 里的自我介绍对上 ——
+  // 三处是同一个地址，改的时候三处一起改，不然用户照着抄的地址是错的。
+  "routes": [
+    { "pattern": "mcp.yoww2026.cn", "custom_domain": true }
+  ],
+
+  // workers.dev 那个地址留着。域名万一没绑上，还有条路能先试。
+  "workers_dev": true,
 
   "vars": {
     "SUPABASE_URL": "https://mejkhrxqdlybfatzecsc.supabase.co",
