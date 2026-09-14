@@ -21,6 +21,17 @@
   "vars": {
     "SUPABASE_URL": "https://mejkhrxqdlybfatzecsc.supabase.co",
 
+    // 自家图床的地址前缀。落在这个前缀下的图直接给原链接，不走中转 ——
+    // 我们自己的桶没有防盗链，中转纯属浪费流量。
+    "IMG_BASE": "https://img.yoww2026.cn",
+
+    // 图片中转地址的签名密钥。它不保护任何数据 —— 中转出去的图本来
+    // 站里人人看得见 —— 只是防止这个 Worker 变成谁都能白嫖的图片代理，
+    // 一天把免费额度刷干净、把 MCP 一起拖挂。
+    // 想换的话：Cloudflare 后台 → 这个 Worker → Settings → Variables，
+    // 加一个同名的加密变量 IMG_SIGN_KEY，会盖掉这里的值。
+    "IMG_SIGN_KEY": "aEW9U6xQEUAiOkw4IJBBtuCo6C6frA6Fq53phdDE",
+
     // 跟主站用的是同一把公开 key —— index.html 里就有一份，浏览器人人可见。
     // 它只说明"请求发给哪个项目"，不代表任何权限：
     // MCP 的内容函数第一个参数是用户令牌，没令牌光有这把 key 读不到任何东西。

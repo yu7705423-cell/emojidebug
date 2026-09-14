@@ -145,6 +145,100 @@ async function rpc(env, fn, args) {
   }
 }
 
+/* ---------------- 图片中转 ----------------
+   站里大半表情图是大家从各家图床贴的链接，那些图床查 Referer ——
+   index.html 里 12 处 <img> 都写了 referrerpolicy="no-referrer" 就是在绕这个。
+   AI 前端的 Markdown 渲染器不会这么干，图床直接把它挡了，
+   用户看到的就是一行 alt 文字加一个加载失败。
+
+   所以图片不直接给原链接，给一条我们自己的地址，由这边去取 ——
+   取的时候不带来路，图床就肯给。
+
+   两点考虑：
+   · 已经在我们自己图床上的图（新上传的那些）不中转，白费流量。
+   · 地址带签名。不签的话这就是一个谁都能白嫖的图片代理，
+     免费额度一天就能被刷干净，MCP 跟着一起挂。 */
+const b64u = {
+  enc: s => btoa(String.fromCharCode(...new TextEncoder().encode(s)))
+              .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''),
+  dec: s => new TextDecoder().decode(Uint8Array.from(
+              atob(s.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0))),
+};
+
+async function sign(env, text) {
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(env.IMG_SIGN_KEY || 'yoww'),
+    { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const mac = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(text));
+  return [...new Uint8Array(mac)].slice(0, 8).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// 时间恒定比较。签名校验用 === 会漏时序信息
+function sameSig(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
+  let d = 0;
+  for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return d === 0;
+}
+
+async function proxyUrl(env, raw, origin) {
+  const url = String(raw == null ? '' : raw).trim();
+  if (!/^https?:\/\//i.test(url)) return url;
+  // 自家图床不用中转
+  const base = env.IMG_BASE || '';
+  if (base && url.startsWith(base)) return url;
+  const payload = b64u.enc(url);
+  // 强制 https：本地跑的时候 origin 可能是 http，那种地址贴进 https 的前端
+  // 会被当成混合内容直接拦掉，又是一次"图加载失败"
+  const secure = origin.replace(/^http:/, 'https:');
+  // 结尾带个扩展名，有些渲染器按扩展名才认它是图
+  const ext = (/\.(png|jpe?g|gif|webp|bmp|avif)(\?|#|$)/i.exec(url) || [, 'webp'])[1].toLowerCase();
+  return `${secure}/i/${await sign(env, payload)}/${payload}.${ext}`;
+}
+
+// 一批图一起换成中转地址，顺手把取不到的丢掉
+async function withProxy(env, list, origin) {
+  return Promise.all((list || []).map(async e =>
+    Object.assign({}, e, { url: await proxyUrl(env, e.url, origin) })));
+}
+
+async function serveImage(env, url, sig, payload) {
+  if (!sameSig(sig, await sign(env, payload))) {
+    return new Response('bad signature', { status: 403, headers: CORS });
+  }
+  let target;
+  try { target = new URL(b64u.dec(payload)); } catch (e) { return new Response('bad url', { status: 400, headers: CORS }); }
+  if (target.protocol !== 'http:' && target.protocol !== 'https:') {
+    return new Response('bad scheme', { status: 400, headers: CORS });
+  }
+
+  let up;
+  try {
+    up = await fetch(target.toString(), {
+      // 关键就是这一行：不带来路，图床才肯给
+      referrer: '', referrerPolicy: 'no-referrer',
+      headers: { accept: 'image/*,*/*;q=0.8', 'user-agent': 'Mozilla/5.0 (compatible; YowwMCP/1.0)' },
+      redirect: 'follow',
+      signal: AbortSignal.timeout(20000),
+      cf: { cacheEverything: true, cacheTtl: 86400 },
+    });
+  } catch (e) {
+    return new Response('upstream unreachable', { status: 502, headers: CORS });
+  }
+  if (!up.ok) return new Response('upstream ' + up.status, { status: 502, headers: CORS });
+
+  const type = up.headers.get('content-type') || '';
+  if (!/^image\//i.test(type)) return new Response('not an image', { status: 415, headers: CORS });
+
+  const h = new Headers(CORS);
+  h.set('content-type', type);
+  // 同一张图的地址是固定的（签名只跟原链接有关），可以放心长缓存
+  h.set('cache-control', 'public, max-age=31536000, immutable');
+  const len = up.headers.get('content-length');
+  if (len) h.set('content-length', len);
+  return new Response(up.body, { status: 200, headers: h });
+}
+
 /* ---------------- 把结果写成给模型看的样子 ----------------
    模型真正会用的就两样：描述词和 url。所以正文写成一行一条的紧凑格式，
    比塞一坨 JSON 省 token，也更不容易被读错。完整结构放 structuredContent，
@@ -194,7 +288,7 @@ function fmtPacks(list) {
     }).join('\n\n');
 }
 
-async function runTool(env, token, name, args) {
+async function runTool(env, token, name, args, origin) {
   const a = args && typeof args === 'object' ? args : {};
   const num = (v, d) => (Number.isFinite(+v) ? Math.trunc(+v) : d);
 
@@ -211,7 +305,8 @@ async function runTool(env, token, name, args) {
     if (!q) return { text: '要搜什么词？', err: true };
     const r = await rpc(env, 'mcp_search_emojis', { p_token: token, p_query: q, p_limit: num(a.limit, 40) });
     if (!r.ok) return { text: authText(r), err: true };
-    return { text: fmtEmojis(r.emojis || [], `搜「${q}」找到 ${(r.emojis || []).length} 张：`), data: r };
+    const list = await withProxy(env, r.emojis, origin);
+    return { text: fmtEmojis(list, `搜「${q}」找到 ${list.length} 张：`), data: { ok: true, emojis: list } };
   }
 
   if (name === 'search_emoji_packs') {
@@ -229,7 +324,9 @@ async function runTool(env, token, name, args) {
     // 用户要的是表情，不是网址。并行发，取不到就算了，不能因为预览失败让整次搜索失败。
     await Promise.all(packs.slice(0, PREVIEW_PACKS).map(async p => {
       const one = await rpc(env, 'mcp_get_pack', { p_token: token, p_id: p.id });
-      if (one && one.ok && Array.isArray(one.emojis)) p.preview = one.emojis.slice(0, PREVIEW_EACH);
+      if (one && one.ok && Array.isArray(one.emojis)) {
+        p.preview = await withProxy(env, one.emojis.slice(0, PREVIEW_EACH), origin);
+      }
     }));
 
     return { text: fmtPacks(packs), data: r };
@@ -245,7 +342,8 @@ async function runTool(env, token, name, args) {
     const p = r.pack || {};
     const head = `《${p.title}》 by ${p.author || '佚名'}  共 ${r.emoji_count} 张\n` +
                  `转载/二改条款（只在用户问起时才提，不影响你现在发图）：${permLine(p)}\n${p.link}\n`;
-    return { text: fmtEmojis(r.emojis || [], head), data: r };
+    const list = await withProxy(env, r.emojis, origin);
+    return { text: fmtEmojis(list, head), data: Object.assign({}, r, { emojis: list }) };
   }
 
   if (name === 'list_categories') {
@@ -282,7 +380,7 @@ function authText(r) {
 const rpcOk  = (id, result) => ({ jsonrpc: '2.0', id, result });
 const rpcErr = (id, code, message) => ({ jsonrpc: '2.0', id, error: { code, message } });
 
-async function handleMessage(env, token, msg) {
+async function handleMessage(env, token, msg, origin) {
   if (!msg || msg.jsonrpc !== '2.0' || typeof msg.method !== 'string') {
     return rpcErr(msg && msg.id != null ? msg.id : null, -32600, 'Invalid Request');
   }
@@ -338,7 +436,7 @@ async function handleMessage(env, token, msg) {
           isError: true,
         });
       }
-      const out = await runTool(env, token, p.name, p.arguments);
+      const out = await runTool(env, token, p.name, p.arguments, origin);
       const res = { content: [{ type: 'text', text: out.text }] };
       if (out.err) res.isError = true;
       if (out.data) res.structuredContent = out.data;
@@ -380,10 +478,23 @@ const json = (body, status = 200, extra = {}) =>
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
+    const origin = url.origin;
 
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
 
-    const first = url.pathname.split('/').filter(Boolean)[0] || '';
+    const seg = url.pathname.split('/').filter(Boolean);
+    const first = seg[0] || '';
+
+    // 图片中转：/i/<签名>/<编码过的原链接>.<扩展名>
+    if (first === 'i') {
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        return new Response(null, { status: 405, headers: Object.assign({ allow: 'GET, HEAD' }, CORS) });
+      }
+      if (seg.length < 3) return new Response('bad request', { status: 400, headers: CORS });
+      const payload = seg.slice(2).join('/').replace(/\.[a-z0-9]+$/i, '');
+      return serveImage(env, url, seg[1], payload);
+    }
+
     const isMcp = first === 'mcp' || first === 'sse';
 
     if (!isMcp) {
@@ -415,13 +526,13 @@ export default {
     if (Array.isArray(body)) {
       const out = [];
       for (const m of body) {
-        const r = await handleMessage(env, token, m);
+        const r = await handleMessage(env, token, m, origin);
         if (r) out.push(r);
       }
       return out.length ? json(out, 200, extra) : new Response(null, { status: 202, headers: CORS });
     }
 
-    const r = await handleMessage(env, token, body);
+    const r = await handleMessage(env, token, body, origin);
     // 通知和响应没有 id，规范说回 202 空body
     if (!r) return new Response(null, { status: 202, headers: CORS });
     return json(r, 200, extra);
