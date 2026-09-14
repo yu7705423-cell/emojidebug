@@ -18,7 +18,7 @@ const NAME = 'yoww';
 // 每次改动都往上加一。线上到底跑的是不是最新的，
 // 打开 /health 看这个数字就知道 —— Cloudflare 后台显示的是它自己的版本号，
 // 跟提交号对不上，别拿那个判断。
-const VERSION = '7';
+const VERSION = '8';
 const SITE = 'https://yoww2026.cn';
 
 // 我们支持的协议版本，新的排前面。客户端报的版本认识就照它的来，
@@ -704,7 +704,10 @@ $('go').addEventListener('click', async ()=>{
     d=step('3. 工具列表');
     const tl=await call(tok,{jsonrpc:'2.0',id:2,method:'tools/list'});
     const names=((tl.json&&tl.json.result&&tl.json.result.tools)||[]).map(t=>t.name);
-    mark(d,names.length===6,names.length+' 个：'+names.join('、'));
+    // 别写死数量：加一个工具就会让这一步自己判自己不合格。看关键的几个在不在就够了
+    const need=['load_emoji_set','search_emojis','get_emoji_pack'];
+    const miss=need.filter(n=>!names.includes(n));
+    mark(d,!miss.length,names.length+' 个：'+names.join('、')+(miss.length?'　缺：'+miss.join('、'):''));
 
     d=step('4. 搜图');
     const cr=await call(tok,{jsonrpc:'2.0',id:3,method:'tools/call',params:{name:'search_emojis',arguments:{query:q,limit:8}}});
