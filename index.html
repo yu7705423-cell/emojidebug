@@ -135,6 +135,7 @@
   .panel{border:1px solid var(--border); border-radius:var(--radius-m); padding:12px; margin-top:10px; display:none;}
   .panel.open{display:block;}
 
+  .mono-hint{font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-weight:600;}
   .row-list{border-top:1px solid var(--border-soft);}
   .row-item{display:flex; gap:10px; align-items:flex-start; padding:9px 2px; border-bottom:1px solid var(--border-soft);}
   .thumb{width:40px; height:40px; border-radius:var(--radius-s); overflow:hidden; background:var(--bg-elev); border:1px solid var(--border-soft); flex-shrink:0; position:relative;}
@@ -5106,7 +5107,36 @@ function openRepoSettingsSheet(){
    令牌代表用户本人，能看到的跟他自己登录时一模一样，不会更多 ——
    接口那边根本没有留言、通知、我的仓库、成员名单对应的功能。
    原文只在生成的那一次显示，库里存的是 sha256。 */
-const MCP_URL = 'https://mcp.yoww2026.cn/mcp';
+const MCP_BASE = 'https://mcp.yoww2026.cn';
+const MCP_URL = MCP_BASE + '/mcp';
+// 出图写法。AI 前端五花八门，认哪种只有用户自己知道 ——
+// 所以摆在生成令牌的同一页上，选完直接给一条拼好的地址，
+// 不用让人跑到别处再配一次
+const MCP_FORMATS = [
+  { key:'markdown', label:'Markdown 图片', tpl:'![描述词](链接)',        note:'大多数前端（Cherry Studio、Chatbox…）' },
+  { key:'plain',    label:'描述词 + 链接', tpl:'描述词 链接',            note:'自带表情包的那类前端最常见' },
+  { key:'url',      label:'只发链接',      tpl:'链接',                   note:'会自动把链接变成图的前端' },
+  { key:'html',     label:'HTML img 标签', tpl:'<img src="链接">',       note:'允许 HTML 的前端' },
+  { key:'custom',   label:'自己写',        tpl:'',                       note:'上面都不对时用' },
+];
+const MCP_FMT_KEY = 'zhp_mcp_fmt_v1';
+function mcpFmtGet(){
+  try{ const v = JSON.parse(localStorage.getItem(MCP_FMT_KEY) || '{}'); return { key: v.key || 'markdown', tpl: v.tpl || '' }; }
+  catch(e){ return { key:'markdown', tpl:'' }; }
+}
+function mcpFmtSet(v){ try{ localStorage.setItem(MCP_FMT_KEY, JSON.stringify(v)); }catch(e){} }
+// 选中的写法拼进地址。markdown 是服务端默认，不用带参数
+// 前端加不了请求头时用的那条：令牌接在路径上，参数还得留在最后
+function mcpUrlWithToken(tok){
+  const u = mcpUrl();
+  const i = u.indexOf('?');
+  return i < 0 ? u + '/' + tok : u.slice(0, i) + '/' + tok + u.slice(i);
+}
+function mcpUrl(){
+  const f = mcpFmtGet();
+  if(f.key === 'custom') return f.tpl.includes('{url}') ? MCP_URL + '?tpl=' + encodeURIComponent(f.tpl) : MCP_URL;
+  return f.key === 'markdown' ? MCP_URL : MCP_URL + '?format=' + f.key;
+}
 const MCP_EXPIRY = [
   { days: 0,   label: '永不过期' },
   { days: 30,  label: '30 天后过期' },
@@ -5142,6 +5172,7 @@ async function openMcpSheet(){
   draw('');
 
   function draw(note){
+    const fmt = mcpFmtGet();
     const list = mcpTokens.length
       ? `<div class="row-list">${mcpTokens.map(t=>`
           <div class="row-item">
@@ -5159,12 +5190,10 @@ async function openMcpSheet(){
       <div class="field-label" style="margin-top:0;">令牌已生成</div>
       <p class="field-help" style="color:#c0392b;"><b>只显示这一次。</b>现在就复制走，关掉这个页面就再也看不到了（丢了也不要紧，撤销掉重新生成一个就行）。</p>
       ${copyRowHtml('令牌', mcpFresh, 'mcpTok')}
-      <div class="field-label">填到你的 AI 前端里</div>
-      <p class="field-help">添加一个 MCP 服务，类型选 <b>Streamable HTTP</b>（不是 stdio），然后照下面两行填。</p>
-      ${copyRowHtml('服务地址', MCP_URL, 'mcpUrl')}
+      <div class="field-label">请求头</div>
       ${copyRowHtml('请求头', 'Authorization: Bearer ' + mcpFresh, 'mcpHdr')}
-      <p class="field-help">如果你的前端只能填地址、加不了请求头，就改填这一条，把令牌接在地址后面：</p>
-      ${copyRowHtml('地址（带令牌）', MCP_URL + '/' + mcpFresh, 'mcpUrl2')}
+      <p class="field-help">前端只能填地址、加不了请求头的话，把服务地址换成这一条（令牌接在后面）：</p>
+      ${copyRowHtml('地址（带令牌）', mcpUrlWithToken(mcpFresh), 'mcpUrl2')}
       <div class="btn-row"><button class="btn-outline" id="mcpDone">我存好了</button></div>
       <div style="height:6px;"></div>` : '';
 
@@ -5176,6 +5205,26 @@ async function openMcpSheet(){
         <p class="field-help" style="margin-top:0;">如果你在用接了 MCP 的 AI 前端（Cherry Studio、Chatbox、LobeChat 之类），
           可以生成一个令牌填进去。之后直接跟 AI 说「找几个笑死的表情」，它会自己来这儿搜，
           <b>不用再导出一遍又导入一遍</b>。</p>`}
+
+        <div class="field-label">服务地址</div>
+        <p class="field-help">在你的 AI 前端里添加一个 MCP 服务，类型选 <b>Streamable HTTP</b>（不是 stdio），地址填这条。</p>
+        ${copyRowHtml('服务地址', mcpUrl(), 'mcpUrl')}
+
+        <div class="field-label">出图写法</div>
+        <p class="field-help">AI 把表情发出来时用哪种写法。<b>认哪种只有你那个前端知道</b> ——
+          发出来显示不出图片就换一个试试，选完地址会跟着变，把上面那条重新复制过去即可。</p>
+        <div class="perm-list">
+          ${MCP_FORMATS.map(f=>`
+            <div class="perm-row" data-mcp-fmt="${f.key}">
+              <div class="sel-check-inline ${fmt.key===f.key?'on':''}">${fmt.key===f.key?CHECK_SVG:''}</div>
+              <span class="perm-label">${esc(f.label)}${f.tpl?`　<span style="color:var(--text-dim); font-size:11px;">${esc(f.tpl)}</span>`:''}
+                <br><span style="color:var(--text-dim); font-size:11px;">${esc(f.note)}</span></span>
+            </div>`).join('')}
+        </div>
+        ${fmt.key === 'custom' ? `
+          <input class="field-input" id="mcpTpl" placeholder="例如：[图片:{url}]" value="${esc(fmt.tpl)}" style="margin-top:8px;">
+          <p class="field-help">可用：<b class="mono-hint">{url}</b> 图片直链　<b class="mono-hint">{desc}</b> 描述词　<b class="mono-hint">{n}</b> 序号。
+            必须包含 <b class="mono-hint">{url}</b>，否则按 Markdown 走。</p>` : ''}
 
         <div class="field-label">我的令牌</div>
         ${list}
@@ -5200,6 +5249,20 @@ async function openMcpSheet(){
       </div>`;
 
     $('mcpClose').addEventListener('click', ()=>{ mcpFresh = null; $('mcpSheetMask').classList.remove('open'); });
+
+    $('mcpSheetBox').querySelectorAll('[data-mcp-fmt]').forEach(el=>{
+      el.addEventListener('click', ()=>{
+        const key = el.dataset.mcpFmt;
+        mcpFmtSet({ key, tpl: key === 'custom' ? mcpFmtGet().tpl : '' });
+        draw('');
+      });
+    });
+    const tplInput = $('mcpTpl');
+    // 每敲一个字就重画会打断中文输入法，所以只在离开输入框时存
+    if(tplInput) tplInput.addEventListener('change', ()=>{
+      mcpFmtSet({ key:'custom', tpl: tplInput.value.trim() });
+      draw('');
+    });
     bindCopyRows($('mcpSheetBox'));
     const done = $('mcpDone');
     if(done) done.addEventListener('click', ()=>{ mcpFresh = null; draw(''); });

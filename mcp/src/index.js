@@ -18,7 +18,7 @@ const NAME = 'yoww';
 // 每次改动都往上加一。线上到底跑的是不是最新的，
 // 打开 /health 看这个数字就知道 —— Cloudflare 后台显示的是它自己的版本号，
 // 跟提交号对不上，别拿那个判断。
-const VERSION = '9';
+const VERSION = '10';
 const SITE = 'https://yoww2026.cn';
 
 // 我们支持的协议版本，新的排前面。客户端报的版本认识就照它的来，
@@ -288,6 +288,7 @@ const permLine = p => [p.allow_repost ? '允许二传' : '不允许二传', p.al
    在 MCP 地址后面加 ?format=url 之类就能换，不用改代码也不用重新部署。 */
 const FORMATS = {
   markdown: { label: 'Markdown 图片', tpl: '![{desc}]({url})' },
+  plain:    { label: '描述词 + 链接', tpl: '{desc} {url}' },
   url:      { label: '纯链接',        tpl: '{url}' },
   html:     { label: 'HTML img 标签', tpl: '<img src="{url}" alt="{desc}">' },
   both:     { label: '两种都给',      tpl: '![{desc}]({url})\n{url}' },
@@ -312,7 +313,9 @@ function fmtOf(name, tpl) {
                    '一次贴好几行就是好几张。别改写这些行的结构。' };
   }
   const f = FORMATS[name] || FORMATS.markdown;
-  const hint = name === 'url'
+  const hint = name === 'plain'
+    ? '↓ 每行是「描述词 + 一个空格 + 图片直链」。整行原样贴进回复即可，这个前端会按它自己的规矩把链接变成图。别改写这一行的结构。'
+    : name === 'url'
     ? '↓ 每张图给的是直链，单独一行原样贴进回复即可，这个前端会自己把它变成图。别改写、别在同一行加说明文字。'
     : name === 'both'
     ? '↓ 每张图给了两种写法。挑你所在环境能显示成图片的那一种贴出去，只贴一种，别两种都贴。'
@@ -921,6 +924,7 @@ function formatPage() {
 <script>
 const PRESETS=[
  ['markdown','Markdown 图片','![{desc}]({url})','大多数前端（Cherry Studio、Chatbox…）'],
+ ['plain','描述词 + 链接','{desc} {url}','自带表情包的那类前端最常见的写法'],
  ['url','纯链接','{url}','会自动把链接变成图的那种'],
  ['html','HTML img 标签','<img src="{url}" alt="{desc}">','允许 HTML 的前端'],
  ['both','两种都给','![{desc}]({url})\\n{url}','不确定认哪种时用这个'],
