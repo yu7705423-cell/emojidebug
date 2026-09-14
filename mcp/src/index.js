@@ -15,7 +15,10 @@
       就算这个 Worker 整个被人拿走，能拿到的也只是任何一个成员本来就看得见的东西。 */
 
 const NAME = 'yoww';
-const VERSION = '1.0.0';
+// 每次改动都往上加一。线上到底跑的是不是最新的，
+// 打开 /health 看这个数字就知道 —— Cloudflare 后台显示的是它自己的版本号，
+// 跟提交号对不上，别拿那个判断。
+const VERSION = '7';
 const SITE = 'https://yoww2026.cn';
 
 // 我们支持的协议版本，新的排前面。客户端报的版本认识就照它的来，
@@ -567,7 +570,12 @@ export default {
     const isMcp = first === 'mcp' || first === 'sse';
 
     if (!isMcp) {
-      if (url.pathname === '/health') return json({ ok: true, name: NAME, version: VERSION });
+      if (url.pathname === '/health') {
+        return json({ ok: true, name: NAME, version: VERSION,
+          // 有哪些功能，一眼看得出跑的是哪一版
+          has: ['selftest', 'list', 'load_emoji_set', 'img_proxy', 'format_switch'],
+          tools: TOOLS.map(t => t.name) });
+      }
       if (url.pathname === '/list') {
         return new Response(listPage(), {
           status: 200,
