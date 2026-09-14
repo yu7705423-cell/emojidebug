@@ -38,9 +38,10 @@ const TOOLS = [
     name: 'search_emojis',
     title: '按描述词搜表情图',
     description:
-      '按关键词在整个 Yoww 站里搜表情图片，返回若干张「描述词 + 图片直链」。' +
-      '这是最常用的一个：用户说「发个笑死的表情」「有没有猫猫无语的图」时就调它。' +
-      '拿到 url 之后可以直接用 Markdown 图片语法 ![](url) 发出来。' +
+      '按关键词在整个 Yoww 站里搜表情图片，返回的每张都带一行拼好的 ![](…)，' +
+      '原样贴进回复就能把图发出去。' +
+      '用户说「发个笑死的表情」「有没有猫猫无语的图」「来个表情」时就用这个，不要用 search_emoji_packs ——' +
+      '那个不返回图片。' +
       '关键词用中文短词效果最好（比如「笑死」「无语」「摸头」），一次一个词，没搜到就换个近义词再试。',
     inputSchema: {
       type: 'object',
@@ -55,8 +56,11 @@ const TOOLS = [
     name: 'search_emoji_packs',
     title: '搜表情包',
     description:
-      '按关键词、分类搜整包的表情包（不是单张图）。用户说「有什么猫猫表情包」「最近发了哪些包」时用。' +
-      '返回每个包的标题、作者、张数、使用权限和站内链接。要拿包里的图，再用 get_emoji_pack。' +
+      '按关键词、分类搜整包的表情包（不是单张图）。用户说「有什么猫猫表情包」「最近发了哪些包」' +
+      '这种想看有哪些包时用。\n' +
+      '⚠️ 这个工具**不返回任何图片**，只有包的标题、作者、张数、使用权限和站内页面地址。' +
+      '用户想看到表情图的话，光调它是不够的：要么挑一个包接着调 get_emoji_pack，' +
+      '要么一开始就改用 search_emojis。别拿一个站内链接就当答复交出去。\n' +
       'query 留空就是按时间倒序列最新的。',
     inputSchema: {
       type: 'object',
@@ -72,7 +76,8 @@ const TOOLS = [
     name: 'get_emoji_pack',
     title: '取一个表情包里的全部图',
     description:
-      '按 pack_id 取一个表情包的全部图片，每张带描述词和直链，顺序跟站上一致。' +
+      '按 pack_id 取一个表情包的全部图片，顺序跟站上一致，每张都带一行拼好的 ![](…)，' +
+      '原样贴进回复就能发出去。' +
       '用户说「把这个包都发出来」「这个包里有什么」时用。' +
       '返回里带了使用权限（allow_repost / allow_edit / other_permission）—— ' +
       '如果用户问能不能转发、能不能改，照这几个字段如实回答，不要自己替作者决定。',
@@ -144,22 +149,38 @@ async function rpc(env, fn, args) {
    用得上的客户端自己去拿。 */
 const trunc = (s, n) => { s = String(s == null ? '' : s); return s.length > n ? s.slice(0, n) + '…' : s; };
 
+// 模型会照抄眼前的东西。所以图片不给裸 URL，直接给一行拼好的 Markdown ——
+// 它要做的只是原样贴出去，而不是「先理解、再决定用什么语法发」。
+// 这是「AI 发了个网站链接而不是表情图」最管用的一处修法。
+const oneLine = s => String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+const altText = s => oneLine(s).replace(/[\[\]]/g, ' ').replace(/\s+/g, ' ').trim() || '表情';
+const imgLine = e => `![${altText(e.desc)}](${e.url})`;
+
+const SEND_HINT = '↓ 下面每一行 ![](…) 都是一张图，原样贴进你的回复就能发出去，一次可以发好几张。' +
+                  '用户要的是图，不要只回网站链接。';
+
 function fmtEmojis(list, head) {
   if (!list.length) return head + '\n（一张都没搜到，换个近义词再试试）';
-  return head + '\n' + list.map((e, i) =>
-    `${i + 1}. ${e.desc || '（没写描述词）'}\n   ${e.url}` +
-    (e.pack_title ? `\n   来自《${e.pack_title}》` : '')).join('\n');
+  return head + '\n' + SEND_HINT + '\n\n' + list.map((e, i) =>
+    `${i + 1}. ${oneLine(e.desc) || '（没写描述词）'}` +
+    (e.pack_title ? `　来自《${oneLine(e.pack_title)}》` : '') +
+    `\n${imgLine(e)}`).join('\n\n');
 }
 
 function fmtPacks(list) {
   if (!list.length) return '没找到符合的表情包。';
-  return `找到 ${list.length} 个表情包：\n` + list.map((p, i) => {
-    const perm = [p.allow_repost ? '允许二传' : '不允许二传', p.allow_edit ? '允许二改' : '不允许二改']
-      .concat(p.other_permission ? ['其他：' + trunc(p.other_permission, 40)] : []).join('、');
-    const tags = Array.isArray(p.tags) && p.tags.length ? `  标签：${p.tags.join(' ')}` : '';
-    return `${i + 1}. 《${p.title}》  ${p.emoji_count} 张  by ${p.author || '佚名'}` +
-           `\n   id: ${p.id}\n   分类：${p.category || '未分类'}${tags}\n   ${perm}\n   ${p.link}`;
-  }).join('\n');
+  // 这个工具拿不到图。说破它，免得模型拿着一个站内链接就交差 ——
+  // 用户想看的是表情，不是一个网页地址。
+  return `找到 ${list.length} 个表情包。注意：这里只有包的信息，没有图片。\n` +
+         `用户想看图的话，挑一个包用 get_emoji_pack 取图再发；或者直接用 search_emojis 按描述词搜单张。\n` +
+         `下面的 yoww2026.cn 链接是站内页面，只在用户明确问「在哪看」「出处」时才给。\n\n` +
+    list.map((p, i) => {
+      const perm = [p.allow_repost ? '允许二传' : '不允许二传', p.allow_edit ? '允许二改' : '不允许二改']
+        .concat(p.other_permission ? ['其他：' + trunc(p.other_permission, 40)] : []).join('、');
+      const tags = Array.isArray(p.tags) && p.tags.length ? `  标签：${p.tags.join(' ')}` : '';
+      return `${i + 1}. 《${p.title}》  ${p.emoji_count} 张  by ${p.author || '佚名'}` +
+             `\n   id: ${p.id}\n   分类：${p.category || '未分类'}${tags}\n   ${perm}\n   站内页面：${p.link}`;
+    }).join('\n');
 }
 
 async function runTool(env, token, name, args) {
@@ -268,9 +289,13 @@ async function handleMessage(env, token, msg) {
         capabilities: { tools: { listChanged: false } },
         serverInfo: { name: NAME, title: 'Yoww 表情包', version: VERSION },
         instructions:
-          'Yoww 是一个表情包 / 字体分享站。用 search_emojis 按描述词搜单张表情图，' +
-          '用 search_emoji_packs 和 get_emoji_pack 找整包。拿到 url 之后可以直接用 ' +
-          'Markdown 图片语法 ![](url) 发给用户。\n' +
+          'Yoww 是一个表情包 / 字体分享站。\n' +
+          '用户要表情的时候，**直接把图发出来**：工具返回里 ![](…) 那些行原样贴进你的回复即可，' +
+          '一次贴好几行就是一次发好几张，像聊天时甩表情一样。不要只回一个网站链接 —— ' +
+          '用户要的是图，不是网页。\n' +
+          '首选 search_emojis（按描述词搜单张，直接出图）。search_emoji_packs 只返回包的信息、' +
+          '不含图片，光靠它没法发图，需要图就接着调 get_emoji_pack。\n' +
+          'yoww2026.cn/?collection=… 这类站内链接，只在用户明确问「在哪看」「出处是什么」时才给。\n' +
           '这些内容都是站里的人自己整理上传的：用户问能不能转发或二次修改时，' +
           '照返回里的 allow_repost / allow_edit / other_permission 如实说，别自己替作者做主。' + note,
       });
