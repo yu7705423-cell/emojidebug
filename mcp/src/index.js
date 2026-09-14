@@ -35,6 +35,24 @@ const CORS = {
    比写清楚"我是什么"重要得多。 */
 const TOOLS = [
   {
+    name: 'load_emoji_set',
+    title: '一次性载入一批表情备用',
+    description:
+      '在对话刚开始、或者用户说「用 Yoww 的表情」时，调用这个**一次**，' +
+      '把一批表情连同描述词一次性载入。\n' +
+      '之后你想发表情，直接从载入的这批里挑一行原样贴出去就行，**不用再调任何工具**——' +
+      '就像你本来就带着一套表情一样，随时想发就发，不要因为"要先查一下"而放弃发表情。\n' +
+      '不带 query 就是载入站里最新的一批（推荐，最省事）；' +
+      '想要某个主题就带上 query（比如「猫」「摸头」）。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: '想要哪类表情；留空表示载入最新的一批，一般留空就行' },
+        limit: { type: 'integer', description: '载入几张，默认 60，最多 100。太多会占上下文' },
+      },
+    },
+  },
+  {
     name: 'search_emojis',
     title: '按描述词搜表情图',
     description:
@@ -311,6 +329,42 @@ async function runTool(env, token, name, args, origin, fmt) {
     return { text: `令牌有效，属于「${r.nickname}」。`, data: r };
   }
 
+  if (name === 'load_emoji_set') {
+    const want = Math.min(Math.max(num(a.limit, 60), 5), 100);
+    const q = String(a.query == null ? '' : a.query).trim();
+    let list = [];
+
+    if (q) {
+      const r = await rpc(env, 'mcp_search_emojis', { p_token: token, p_query: q, p_limit: want });
+      if (!r.ok) return { text: authText(r), err: true };
+      list = r.emojis || [];
+    } else {
+      // 不挑主题时按包取：一包一包往里装，装够为止。
+      // 这样载入的是成套的，比按词搜出来的零散图更像"一套表情"。
+      const ps = await rpc(env, 'mcp_search_packs', { p_token: token, p_query: '', p_category: '', p_limit: 12 });
+      if (!ps.ok) return { text: authText(ps), err: true };
+      for (const p of ps.packs || []) {
+        if (list.length >= want) break;
+        const one = await rpc(env, 'mcp_get_pack', { p_token: token, p_id: p.id });
+        if (one && one.ok && Array.isArray(one.emojis)) list = list.concat(one.emojis);
+      }
+      list = list.slice(0, want);
+    }
+
+    if (!list.length) return { text: q ? `没找到「${q}」相关的表情，换个词再试。` : '站里还没有表情。', err: true };
+
+    const withUrls = await withProxy(env, list, origin);
+    const f = fmtOf(fmt);
+    const text =
+      `已载入 ${withUrls.length} 张表情${q ? `（主题：${q}）` : ''}。\n\n` +
+      `【接下来怎么用】想发表情的时候，从下面这份列表里挑一行，原样贴进你的回复就发出去了，\n` +
+      `一次贴好几行就是一次发好几张。**不用再调用任何工具**，这份列表整段对话里一直有效。\n` +
+      `挑的依据是每行括号前的描述词。不确定发什么就别硬发，宁可不发。\n` +
+      `列表里没有合适的，再用 search_emojis 按词搜。\n\n` +
+      withUrls.map(e => f.line(e)).join('\n');
+    return { text, data: { ok: true, count: withUrls.length, emojis: withUrls } };
+  }
+
   if (name === 'search_emojis') {
     const q = String(a.query == null ? '' : a.query).trim();
     if (!q) return { text: '要搜什么词？', err: true };
@@ -423,8 +477,11 @@ async function handleMessage(env, token, msg, origin, fmt) {
           `用户要表情的时候，**直接把图发出来**：工具返回里那几行（当前出图写法：${f.label}）原样贴进你的回复即可，` +
           '一次贴好几行就是一次发好几张，像聊天时甩表情一样。不要只回一个网站链接 —— ' +
           '用户要的是图，不是网页。\n' +
-          '首选 search_emojis（按描述词搜单张，最直接）。search_emoji_packs 按包搜，' +
-          '会给前几个包附上预览图；想要某个包的全部图就用 get_emoji_pack。三个都会出图。\n' +
+          '**推荐用法**：对话一开始先调一次 load_emoji_set，把一批表情载进来；' +
+          '之后整段对话里想发表情就从那批里挑一行贴出去，不用再调工具。' +
+          '这样发表情是零成本的，该发就发，别因为"要先查"而放弃。\n' +
+          '载入的那批里没有合适的，再用 search_emojis 按词搜单张；' +
+          'search_emoji_packs 按包搜、会附预览图；get_emoji_pack 取某个包的全部。都会出图。\n' +
           'yoww2026.cn/?collection=… 这类站内链接，只在用户明确问「在哪看」「出处是什么」时才给。\n' +
           '关于使用权限，别理解反了：把图发给正在跟你说话的这个用户看，是这个站最正常的用法，' +
           '**不需要任何额外许可，不用犹豫，也不用先问**。整个站的东西本来就是给大家取用的。\n' +
@@ -511,6 +568,12 @@ export default {
 
     if (!isMcp) {
       if (url.pathname === '/health') return json({ ok: true, name: NAME, version: VERSION });
+      if (url.pathname === '/list') {
+        return new Response(listPage(), {
+          status: 200,
+          headers: Object.assign({ 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }, CORS),
+        });
+      }
       if (url.pathname === '/selftest') {
         return new Response(selftest(), {
           status: 200,
@@ -663,6 +726,94 @@ $('go').addEventListener('click', async ()=>{
 </html>`;
 }
 
+/* ---------------- 导出成一份列表 ----------------
+   有些前端的表情包是"一份写死在 prompt 里的清单"，而且那份清单允许自己填。
+   那种情况下最省事的不是让 AI 来调工具，而是直接把我们的清单给用户，
+   让他贴进去 —— 跟前端原本的机制完全一致，零调用、零延迟。 */
+function listPage() {
+  return `<!doctype html><html lang="zh-CN"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Yoww 表情清单导出</title>
+<style>
+ :root{color-scheme:light dark}
+ body{margin:0;padding:24px 16px;max-width:760px;margin-inline:auto;
+      font:15px/1.7 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+      color:#1b1b1f;background:#fbfaf8}
+ @media (prefers-color-scheme:dark){body{color:#e8e6e3;background:#17171a}
+   input,select,textarea{background:#26262b!important;border-color:#3a3a42!important;color:inherit}}
+ h1{font-size:20px;margin:0 0 4px} .m{color:#8a8681;font-size:13px;margin:0 0 18px}
+ .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+ input,select{flex:1;min-width:130px;box-sizing:border-box;padding:10px 12px;font-size:14px;
+       border:1px solid #ddd8d0;border-radius:10px;background:#fff;color:inherit}
+ button{padding:10px 18px;font-size:15px;border:none;border-radius:10px;
+        background:#3b6ef5;color:#fff;cursor:pointer}
+ button:disabled{opacity:.5}
+ textarea{width:100%;box-sizing:border-box;margin-top:12px;height:300px;padding:10px;
+          font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;
+          border:1px solid #ddd8d0;border-radius:10px;background:#fff;color:inherit}
+ .st{margin-top:8px;font-size:13px;color:#8a8681}
+</style>
+<h1>表情清单导出</h1>
+<p class="m">有些前端的表情包是一份写死在 prompt 里的清单，而且允许自己填。
+那种就不用让 AI 调工具了 —— 在这儿导出，贴进去，跟它原本的机制一模一样，零调用零延迟。</p>
+<div class="row"><input id="tok" placeholder="令牌（yoww_ 开头）" autocomplete="off" spellcheck="false"></div>
+<div class="row">
+  <input id="q" placeholder="主题，留空＝最新的一批">
+  <input id="n" type="number" value="60" min="5" max="300" title="要几张">
+  <select id="f">
+    <option value="md">Markdown：![描述词](链接)</option>
+    <option value="tsv">两列：描述词 ⇥ 链接</option>
+    <option value="url">只要链接</option>
+    <option value="json">JSON</option>
+  </select>
+</div>
+<div class="row"><button id="go">导出</button><button id="cp" disabled>复制</button></div>
+<div class="st" id="st"></div>
+<textarea id="out" readonly placeholder="导出的清单会出现在这里"></textarea>
+<script>
+const $=id=>document.getElementById(id);
+async function call(tok,body){
+  const r=await fetch('/mcp',{method:'POST',headers:{'content-type':'application/json',
+    ...(tok?{authorization:'Bearer '+tok}:{})},body:JSON.stringify(body)});
+  try{ return JSON.parse(await r.text()); }catch(e){ return null; }
+}
+$('go').addEventListener('click', async ()=>{
+  const tok=$('tok').value.trim(); if(!tok){ $('st').textContent='先把令牌填上'; return; }
+  $('go').disabled=true; $('st').textContent='取数据中…';
+  const want=Math.min(Math.max(+$('n').value||60,5),300);
+  const q=$('q').value.trim();
+  let got=[];
+  // 一次最多 100，要更多就分几次翻页取
+  for(let off=0; got.length<want; off+=100){
+    const res=await call(tok,{jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'load_emoji_set',
+      arguments:{query:q,limit:Math.min(100,want-got.length)}}});
+    const sc=res&&res.result&&res.result.structuredContent;
+    if(!sc||!sc.ok){ $('st').textContent=(res&&res.result&&res.result.content&&res.result.content[0].text)||'取不到，检查令牌'; $('go').disabled=false; return; }
+    const fresh=(sc.emojis||[]).filter(e=>!got.some(g=>g.url===e.url));
+    if(!fresh.length) break;
+    got=got.concat(fresh);
+    if((sc.emojis||[]).length<100) break;
+  }
+  got=got.slice(0,want);
+  const f=$('f').value;
+  const alt=e=>String(e.desc||'表情').replace(/[\\[\\]\\n\\t]/g,' ').trim()||'表情';
+  $('out').value =
+    f==='md'   ? got.map(e=>'!['+alt(e)+']('+e.url+')').join('\\n') :
+    f==='tsv'  ? got.map(e=>alt(e)+'\\t'+e.url).join('\\n') :
+    f==='url'  ? got.map(e=>e.url).join('\\n') :
+                 JSON.stringify(got.map(e=>({desc:alt(e),url:e.url})),null,1);
+  $('st').textContent='共 '+got.length+' 张。'+(got.length<want?'（站里就这么多）':'');
+  $('cp').disabled=!got.length; $('go').disabled=false;
+});
+$('cp').addEventListener('click', async ()=>{
+  try{ await navigator.clipboard.writeText($('out').value); $('st').textContent='已复制'; }
+  catch(e){ $('out').select(); $('st').textContent='复制失败，手动全选复制'; }
+});
+</script>
+</html>`;
+}
+
 function landing() {
   return `<!doctype html><html lang="zh-CN"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -688,6 +839,16 @@ function landing() {
 <li>如果你的前端只能填地址、加不了请求头，就把令牌接在地址后面：
 <pre>https://mcp.yoww2026.cn/mcp/你的令牌</pre></li>
 </ol>
+<h2>前端自带表情包的话</h2>
+<p>有些前端（自带表情包的那类）是每次把一整份「描述词 + 链接」清单塞进 prompt，
+再告诉 AI 想发表情就照某个格式写。那种情况下：</p>
+<ul>
+<li><b>清单能自己填</b> → 去 <a href="/list">/list</a> 导出一份贴进去，最省事，零调用零延迟。</li>
+<li><b>清单填不了</b> → 让 AI 在对话开头调一次 <code>load_emoji_set</code>，
+效果一样，之后整段对话它都能直接发，不用再调工具。</li>
+<li><b>它内置的表情关不掉</b> → 模型会优先用内置那套（对它来说成本为零）。
+在系统提示词里写死「发表情一律用 Yoww」，或者每次明说。</li>
+</ul>
 <h2>图显示不出来的时候</h2>
 <p>有些前端（尤其自带表情包功能的那类）不渲染 Markdown 图片，或者会把外链图片剥掉。
 把服务地址后面加个参数换一种写法：</p>
