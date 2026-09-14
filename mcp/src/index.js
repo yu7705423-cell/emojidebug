@@ -499,6 +499,12 @@ export default {
 
     if (!isMcp) {
       if (url.pathname === '/health') return json({ ok: true, name: NAME, version: VERSION });
+      if (url.pathname === '/selftest') {
+        return new Response(selftest(), {
+          status: 200,
+          headers: Object.assign({ 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }, CORS),
+        });
+      }
       return new Response(landing(), {
         status: url.pathname === '/' ? 200 : 404,
         headers: Object.assign({ 'content-type': 'text/html; charset=utf-8' }, CORS),
@@ -538,6 +544,109 @@ export default {
     return json(r, 200, extra);
   },
 };
+
+/* ---------------- 自检页 ----------------
+   来回排查太累了：AI 发不出图的时候，分不清是我们这边坏了、
+   还是那个前端 / 模型的问题。这页不经过任何 AI，自己把
+   握手 → 列工具 → 搜图 → 真把图渲染出来 走一遍，
+   哪一步断了一眼就看得见。 */
+function selftest() {
+  return `<!doctype html><html lang="zh-CN"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Yoww MCP 自检</title>
+<style>
+ :root{color-scheme:light dark}
+ body{margin:0;padding:24px 16px;max-width:680px;margin-inline:auto;
+      font:15px/1.7 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+      color:#1b1b1f;background:#fbfaf8}
+ @media (prefers-color-scheme:dark){body{color:#e8e6e3;background:#17171a}
+   input,pre,.step{background:#26262b!important;border-color:#3a3a42!important}}
+ h1{font-size:20px;margin:0 0 4px} .m{color:#8a8681;font-size:13px;margin:0 0 18px}
+ input{width:100%;box-sizing:border-box;padding:10px 12px;font-size:14px;
+       border:1px solid #ddd8d0;border-radius:10px;background:#fff;color:inherit}
+ button{margin-top:10px;padding:10px 18px;font-size:15px;border:none;border-radius:10px;
+        background:#3b6ef5;color:#fff;cursor:pointer}
+ button:disabled{opacity:.5}
+ .step{margin-top:10px;padding:10px 12px;border:1px solid #e6e1d9;border-radius:10px;background:#fff}
+ .step b{font-weight:600} .ok{color:#1f8a4c} .bad{color:#c0392b}
+ pre{white-space:pre-wrap;word-break:break-all;font-size:12px;margin:6px 0 0;
+     padding:8px;border-radius:8px;background:#f3f0ea;border:1px solid #e6e1d9}
+ .grid{display:flex;flex-wrap:wrap;gap:10px;margin-top:10px}
+ .cell{width:104px;font-size:11px;text-align:center;word-break:break-all}
+ .cell img{width:104px;height:104px;object-fit:contain;border-radius:8px;
+           background:#f3f0ea;border:1px solid #e6e1d9;display:block}
+</style>
+<h1>Yoww MCP 自检</h1>
+<p class="m">这页不经过任何 AI。它会自己走一遍握手、列工具、搜图，并把图真的渲染出来 —— 哪一步断了一眼就看得见。</p>
+<input id="tok" placeholder="把令牌粘进来（yoww_ 开头）" autocomplete="off" spellcheck="false">
+<input id="q" placeholder="搜什么词，默认「笑」" style="margin-top:8px" autocomplete="off">
+<button id="go">开始检查</button>
+<div id="out"></div>
+<script>
+const $=id=>document.getElementById(id), out=$('out');
+function step(name){ const d=document.createElement('div'); d.className='step';
+  d.innerHTML='<b>'+name+'</b> <span class="r">检查中…</span>'; out.appendChild(d); return d; }
+function mark(d,ok,msg,extra){ d.querySelector('.r').innerHTML=
+  '<span class="'+(ok?'ok':'bad')+'">'+(ok?'✅ ':'❌ ')+msg+'</span>';
+  if(extra){ const p=document.createElement('pre'); p.textContent=extra; d.appendChild(p); } }
+async function call(tok,body){
+  const r=await fetch('/mcp',{method:'POST',headers:{'content-type':'application/json',
+    ...(tok?{authorization:'Bearer '+tok}:{})},body:JSON.stringify(body)});
+  const t=await r.text();
+  return { status:r.status, json:(()=>{ try{ return JSON.parse(t); }catch(e){ return null; } })(), raw:t };
+}
+$('go').addEventListener('click', async ()=>{
+  out.innerHTML=''; $('go').disabled=true;
+  const tok=$('tok').value.trim(), q=$('q').value.trim()||'笑';
+  try{
+    let d=step('1. 服务器活着吗');
+    const h=await fetch('/health'); const hj=await h.json().catch(()=>null);
+    mark(d,h.ok,h.ok?('在，版本 '+(hj&&hj.version)):'HTTP '+h.status);
+    if(!h.ok) return;
+
+    d=step('2. 握手（令牌对不对）');
+    const init=await call(tok,{jsonrpc:'2.0',id:1,method:'initialize',params:{protocolVersion:'2025-06-18',capabilities:{},clientInfo:{name:'selftest',version:'1'}}});
+    const ins=init.json&&init.json.result&&init.json.result.instructions||'';
+    const tokOk=ins.includes('当前令牌属于');
+    // 失败时只把那句 ⚠️ 拎出来，别把整段给模型看的说明倒给用户
+    const warn=ins.slice(ins.indexOf('⚠️'));
+    mark(d,tokOk,tokOk?ins.slice(ins.lastIndexOf('当前令牌属于')):'令牌没通过',
+         tokOk?'':(warn||('HTTP '+init.status+' '+init.raw.slice(0,200))));
+    if(!tokOk) return;
+
+    d=step('3. 工具列表');
+    const tl=await call(tok,{jsonrpc:'2.0',id:2,method:'tools/list'});
+    const names=((tl.json&&tl.json.result&&tl.json.result.tools)||[]).map(t=>t.name);
+    mark(d,names.length===6,names.length+' 个：'+names.join('、'));
+
+    d=step('4. 搜图');
+    const cr=await call(tok,{jsonrpc:'2.0',id:3,method:'tools/call',params:{name:'search_emojis',arguments:{query:q,limit:8}}});
+    const res=cr.json&&cr.json.result;
+    const emo=(res&&res.structuredContent&&res.structuredContent.emojis)||[];
+    mark(d,!!emo.length,emo.length?('搜「'+q+'」拿到 '+emo.length+' 张'):'一张都没拿到',
+         emo.length?'':((res&&res.content&&res.content[0]&&res.content[0].text)||cr.raw).slice(0,300));
+    if(!emo.length) return;
+
+    d=step('5. 图片能不能真的加载出来');
+    const g=document.createElement('div'); g.className='grid'; d.appendChild(g);
+    let good=0, done=0;
+    const finish=()=>{ if(done===emo.length) mark(d,good===emo.length,
+      good+' / '+emo.length+' 张加载成功'+(good<emo.length?'（失败的那几张下面写了地址，发给我）':'')); };
+    emo.forEach(e=>{
+      const c=document.createElement('div'); c.className='cell';
+      const im=new Image(); im.src=e.url; im.alt='';
+      const cap=document.createElement('div'); cap.textContent='加载中…';
+      im.onload=()=>{ good++; done++; cap.textContent=(e.desc||'').slice(0,14)||'（无描述）'; finish(); };
+      im.onerror=()=>{ done++; cap.innerHTML='<span class="bad">加载失败</span><br>'+e.url; finish(); };
+      c.appendChild(im); c.appendChild(cap); g.appendChild(c);
+    });
+  }catch(err){ const d=step('出错了'); mark(d,false,String(err&&err.message||err)); }
+  finally{ $('go').disabled=false; }
+});
+</script>
+</html>`;
+}
 
 function landing() {
   return `<!doctype html><html lang="zh-CN"><meta charset="utf-8">
