@@ -18,7 +18,7 @@ const NAME = 'yoww';
 // 每次改动都往上加一。线上到底跑的是不是最新的，
 // 打开 /health 看这个数字就知道 —— Cloudflare 后台显示的是它自己的版本号，
 // 跟提交号对不上，别拿那个判断。
-const VERSION = '10';
+const VERSION = '11';
 const SITE = 'https://yoww2026.cn';
 
 // 我们支持的协议版本，新的排前面。客户端报的版本认识就照它的来，
@@ -172,6 +172,26 @@ async function rpc(env, fn, args) {
   } catch (e) {
     return { ok: false, error: '服务端返回了看不懂的内容' };
   }
+}
+
+/* 写法现在存在令牌上。地址永远是 /mcp 一个字不变 ——
+   有些前端按"MCP 服务配置"算哈希拼进工具名，地址一改哈希就变，
+   老对话里的调用记录跟新的对不上，整个对话直接报废。
+
+   每次调用都去问一遍数据库太浪费，isolate 里缓存一分钟。
+   改了写法最多一分钟生效，换来的是每次调用少一个来回。 */
+const TOKEN_CACHE = new Map();
+const TOKEN_TTL = 60000;
+async function tokenCfg(env, token) {
+  const hit = TOKEN_CACHE.get(token);
+  if (hit && hit.at > Date.now() - TOKEN_TTL) return hit.v;
+  const v = await rpc(env, 'mcp_token_info', { p_token: token });
+  // 连不上时别把失败缓存起来 —— 否则服务器抖一下，这个令牌一分钟内都用不了
+  if (v && (v.ok || v.error === 'invalid_token')) {
+    if (TOKEN_CACHE.size > 500) TOKEN_CACHE.clear();
+    TOKEN_CACHE.set(token, { at: Date.now(), v });
+  }
+  return v;
 }
 
 /* ---------------- 图片中转 ----------------
@@ -356,6 +376,11 @@ function fmtPacks(list, fmt, tpl) {
 }
 
 async function runTool(env, token, name, args, origin, fmt, tpl) {
+  // 写法的优先级：模型临时指定 > 地址上的参数 > 令牌上存的 > 默认
+  if (!fmt && !tpl) {
+    const cfg = await tokenCfg(env, token);
+    if (cfg && cfg.ok) { fmt = cfg.fmt || ''; tpl = cfg.tpl || ''; }
+  }
   const a = args && typeof args === 'object' ? args : {};
   const num = (v, d) => (Number.isFinite(+v) ? Math.trunc(+v) : d);
   // 用户明说「用 <img> 标签发」之类的时候，模型可以临时换写法。
@@ -363,11 +388,12 @@ async function runTool(env, token, name, args, origin, fmt, tpl) {
   if (a.format && FORMATS[a.format]) { fmt = a.format; tpl = ''; }
 
   if (name === 'whoami') {
-    const r = await rpc(env, 'mcp_whoami', { p_token: token });
+    const r = await tokenCfg(env, token);
     // 连不上和令牌过期是两回事，别混着报 —— 报错了让人去重办令牌，
     // 结果其实是服务器在抽风，那就白折腾了
-    if (!r.ok) return { text: authText(r), err: true };
-    return { text: `令牌有效，属于「${r.nickname}」。`, data: r };
+    if (!r || !r.ok) return { text: authText(r || {}), err: true };
+    const cur = fmtOf(fmt, tpl);
+    return { text: `令牌有效，属于「${r.nickname}」，出图写法：${cur.label}。`, data: r };
   }
 
   if (name === 'load_emoji_set') {
@@ -504,9 +530,13 @@ async function handleMessage(env, token, msg, origin, fmt, tpl) {
         note = '\n\n⚠️ 没有检测到令牌。请在这个 MCP 服务的地址后面加上你的令牌，' +
                '或者配一个 Authorization: Bearer <令牌> 的请求头。令牌在 ' + SITE + ' 的「我的 → MCP 接口」里生成。';
       } else {
-        const who = await rpc(env, 'mcp_whoami', { p_token: token });
-        if (!who.ok) note = '\n\n⚠️ 令牌无效、已撤销或已过期，现在什么都搜不到。到 ' + SITE + ' 的「我的 → MCP 接口」重新生成一个。';
-        else note = `\n\n当前令牌属于「${who.nickname}」。`;
+        const who = await tokenCfg(env, token);
+        if (!who || !who.ok) {
+          note = '\n\n⚠️ 令牌无效、已撤销或已过期，现在什么都搜不到。到 ' + SITE + ' 的「我的 → MCP 接口」重新生成一个。';
+        } else {
+          note = `\n\n当前令牌属于「${who.nickname}」。`;
+          if (!fmt && !tpl) { fmt = who.fmt || ''; tpl = who.tpl || ''; }
+        }
       }
       const f = fmtOf(fmt, tpl);
       return rpcOk(id, {
@@ -611,7 +641,7 @@ export default {
       if (url.pathname === '/health') {
         return json({ ok: true, name: NAME, version: VERSION,
           // 有哪些功能，一眼看得出跑的是哪一版
-          has: ['selftest', 'list', 'format_page', 'custom_tpl', 'load_emoji_set', 'img_proxy'],
+          has: ['selftest', 'list', 'format_page', 'custom_tpl', 'token_format', 'load_emoji_set', 'img_proxy'],
           tools: TOOLS.map(t => t.name) });
       }
       if (url.pathname === '/format') {
@@ -995,9 +1025,12 @@ function landing() {
 在系统提示词里写死「发表情一律用 Yoww」，或者每次明说。</li>
 </ul>
 <h2>图显示不出来的时候</h2>
-<p>不同前端认的写法不一样。去 <a href="/format">/format</a> 挑一种、
-或者自己写一行（比如 <code>[图片:{url}]</code>），那页会拼好一条新的 MCP 地址，
-换上去就行，令牌不用动。</p>
+<p>不同前端认的写法不一样。到 <a href="${SITE}">yoww2026.cn</a> 的「我的 → MCP 接口」，
+点那个令牌的「改写法」—— 写法是<b>跟着令牌</b>走的，一个前端一个令牌，各自设各自的，
+改完立刻生效，<b>地址一个字都不用动</b>。</p>
+<p>地址永远是 <code>https://mcp.yoww2026.cn/mcp</code>，别往后面加参数：
+有些前端会按 MCP 服务配置算哈希拼进工具名，地址一改哈希就变，
+老对话里的调用记录跟新的对不上，整个对话会直接报错。</p>
 <p>不确定是哪一步出的问题，打开 <a href="/selftest">/selftest</a> 自己跑一遍，
 它不经过 AI，直接告诉你是服务器、令牌、搜索还是图片加载断了。</p>
 <h2>配好之后能干嘛</h2>

@@ -136,6 +136,7 @@
   .panel.open{display:block;}
 
   .mono-hint{font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-weight:600;}
+  .mcp-picker{margin-top:10px; padding-top:8px; border-top:1px dashed var(--border-soft);}
   .mcp-prev{margin-top:6px; padding:10px 12px; border:1px solid var(--border); border-radius:var(--radius-s);
     background:var(--bg-elev); font:12px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace;
     white-space:pre-wrap; word-break:break-all;}
@@ -5129,14 +5130,31 @@ const MCP_SEPS = [
   { label:'空格', v:' '   }, { label:'：', v:'：'  }, { label:':', v:': ' },
   { label:'|',    v:' | ' }, { label:'换行', v:'\n' }, { label:'不加', v:'' },
 ];
-const MCP_FMT_KEY = 'zhp_mcp_fmt_v1';
-function mcpFmtGet(){
-  try{
-    const v = JSON.parse(localStorage.getItem(MCP_FMT_KEY) || '{}');
-    return { key: v.key || 'markdown', tpl: v.tpl || '', sep: v.sep == null ? ' ' : v.sep };
-  }catch(e){ return { key:'markdown', tpl:'', sep:' ' }; }
+// 正在编辑哪个令牌的写法。null = 还没建令牌时的那份默认，建完会写进新令牌
+let mcpEditing = null;
+let mcpDraft = { key:'markdown', tpl:'', sep:' ' };
+function mcpFmtGet(){ return mcpDraft; }
+function mcpFmtSet(v){ mcpDraft = { key: v.key || 'markdown', tpl: v.tpl || '', sep: v.sep == null ? ' ' : v.sep }; }
+// 令牌里存的是 fmt/tpl 两个字段，界面上是 key/sep/tpl 三个，来回换一下
+function mcpFmtFromToken(t){
+  const tpl = (t && t.tpl) || '';
+  const m = /^\{desc\}([\s\S]*)\{url\}$/.exec(tpl);
+  if(m) return { key:'plain', tpl:'', sep:m[1] };
+  if(tpl) return { key:'custom', tpl, sep:' ' };
+  const f = (t && t.fmt) || 'markdown';
+  return { key: ['markdown','url','html','both'].includes(f) ? f : 'markdown', tpl:'', sep:' ' };
 }
-function mcpFmtSet(v){ try{ localStorage.setItem(MCP_FMT_KEY, JSON.stringify(v)); }catch(e){} }
+function mcpFmtToToken(f){
+  if(f.key === 'custom') return { fmt:'', tpl: f.tpl.includes('{url}') ? f.tpl : '' };
+  if(f.key === 'plain')  return { fmt:'', tpl: mcpTpl(f) };
+  return { fmt: f.key === 'markdown' ? '' : f.key, tpl:'' };
+}
+function mcpFmtLabel(f){
+  const o = MCP_FORMATS.find(x=>x.key===f.key);
+  if(f.key !== 'plain') return o ? o.label : 'Markdown 图片';
+  const sp = MCP_SEPS.find(x=>x.v===f.sep);
+  return '描述词 + 链接（中间：' + (sp ? sp.label : JSON.stringify(f.sep)) + '）';
+}
 
 // 当前写法对应的模板。plain 按选中的分隔符现拼
 function mcpTpl(f){
@@ -5161,13 +5179,10 @@ function mcpUrlWithToken(tok){
   const i = u.indexOf('?');
   return i < 0 ? u + '/' + tok : u.slice(0, i) + '/' + tok + u.slice(i);
 }
-function mcpUrl(){
-  const f = mcpFmtGet();
-  if(f.key === 'markdown') return MCP_URL;
-  if(f.key === 'url' || f.key === 'html') return MCP_URL + '?format=' + f.key;
-  const tpl = mcpTpl(f);
-  return tpl.includes('{url}') ? MCP_URL + '?tpl=' + encodeURIComponent(tpl) : MCP_URL;
-}
+// 地址永远是这一条，一个参数都不带。
+// 写法存在令牌上 —— 有些前端按"MCP 服务配置"算哈希拼进工具名，
+// 地址一改哈希就变，老对话里的调用记录跟新的对不上，整个对话直接报废。
+function mcpUrl(){ return MCP_URL; }
 const MCP_EXPIRY = [
   { days: 0,   label: '永不过期' },
   { days: 30,  label: '30 天后过期' },
@@ -5185,9 +5200,37 @@ function mcpTimeNote(t){
   return parts.join('　·　');
 }
 
+// 写法选择那一段。令牌行里和「新建」下面都用它，所以抽出来
+function mcpFmtPicker(f){
+  return `
+    <div class="mcp-picker">
+      <div class="perm-list">
+        ${MCP_FORMATS.map(o=>`
+          <div class="perm-row" data-mcp-fmt="${o.key}">
+            <div class="sel-check-inline ${f.key===o.key?'on':''}">${f.key===o.key?CHECK_SVG:''}</div>
+            <span class="perm-label">${esc(o.label)}
+              <br><span style="color:var(--text-dim); font-size:11px;">${esc(o.note)}</span></span>
+          </div>`).join('')}
+      </div>
+      ${f.key === 'plain' ? `
+        <div class="field-label" style="margin-top:10px;">描述词和链接中间放什么</div>
+        <div class="chip-row">
+          ${MCP_SEPS.map(sp=>`<button type="button" class="chip${f.sep===sp.v?' active':''}" data-mcp-sep="${esc(sp.v)}">${esc(sp.label)}</button>`).join('')}
+        </div>
+        <input class="field-input" id="mcpSep" placeholder="或者自己填" value="${esc(MCP_SEPS.some(sp=>sp.v===f.sep)?'':f.sep)}" style="margin-top:8px;">` : ''}
+      ${f.key === 'custom' ? `
+        <input class="field-input" id="mcpTpl" placeholder="例如：[图片:{url}]" value="${esc(f.tpl)}" style="margin-top:8px;">
+        <p class="field-help">可用：<b class="mono-hint">{url}</b> 图片直链　<b class="mono-hint">{desc}</b> 描述词　<b class="mono-hint">{n}</b> 序号。
+          必须包含 <b class="mono-hint">{url}</b>，否则按 Markdown 走。</p>` : ''}
+      <div class="field-label">AI 会发成这样</div>
+      <div class="mcp-prev">${esc(mcpPreview(f))}</div>
+      <p class="field-help" style="margin-bottom:0;">拿这一行跟你那个前端要求的样子对一下，一模一样就对了。</p>
+    </div>`;
+}
+
 async function openMcpSheet(){
   if(!currentUserId){ showToast('请先登录'); return; }
-  mcpFresh = null;
+  mcpFresh = null; mcpEditing = null; mcpFmtSet({ key:'markdown', tpl:'', sep:' ' });
   $('mcpSheetMask').classList.add('open');
   draw('加载中…');
   const { data, error } = await sb.rpc('mcp_list_tokens');
@@ -5202,6 +5245,23 @@ async function openMcpSheet(){
   mcpTokens = asArray(data);
   draw('');
 
+  // 改的是已有令牌就存回数据库；改的是「新建」那份就先留在内存里，
+  // 等真的建出来再一起写进去
+  async function saveFmt(){
+    const f = mcpFmtGet();
+    // 先把内存里的令牌改掉再重画，不然那一行的「写法：」会慢一拍
+    if(mcpEditing && mcpEditing !== 'new'){
+      const t0 = mcpTokens.find(x=>x.id === mcpEditing);
+      if(t0) Object.assign(t0, mcpFmtToToken(f));
+    }
+    draw('');
+    if(!mcpEditing || mcpEditing === 'new') return;
+    const payload = mcpFmtToToken(f);
+    const { data, error } = await sb.rpc('mcp_set_token_format',
+      { p_id: mcpEditing, p_fmt: payload.fmt, p_tpl: payload.tpl });
+    if(error || !data || !data.ok) showToast('写法没保存上，检查网络后重试');
+  }
+
   function draw(note){
     const fmt = mcpFmtGet();
     const list = mcpTokens.length
@@ -5211,8 +5271,13 @@ async function openMcpSheet(){
               <div style="font-size:13px; font-weight:500;">${esc(t.name || '未命名令牌')}</div>
               <div style="font-size:11px; color:var(--text-dim); font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${esc(t.prefix)}…</div>
               <div style="font-size:11px; color:var(--text-dim); margin-top:1px;">${esc(mcpTimeNote(t))}</div>
+              <div style="font-size:11px; color:var(--text-dim); margin-top:1px;">写法：${esc(mcpFmtLabel(mcpFmtFromToken(t)))}</div>
+              ${mcpEditing === t.id ? mcpFmtPicker(fmt) : ''}
             </div>
-            <button class="row-act-sm" data-mcp-del="${esc(t.id)}">撤销</button>
+            <div style="display:flex; flex-direction:column; gap:6px; flex:0 0 auto;">
+              <button class="row-act-sm" data-mcp-edit="${esc(t.id)}">${mcpEditing === t.id ? '收起' : '改写法'}</button>
+              <button class="row-act-sm" data-mcp-del="${esc(t.id)}">撤销</button>
+            </div>
           </div>`).join('')}</div>`
       : (note ? `<p class="field-help">${esc(note)}</p>` : '<p class="field-help">还没有令牌。</p>');
 
@@ -5241,35 +5306,9 @@ async function openMcpSheet(){
         <p class="field-help">在你的 AI 前端里添加一个 MCP 服务，类型选 <b>Streamable HTTP</b>（不是 stdio），地址填这条。</p>
         ${copyRowHtml('服务地址', mcpUrl(), 'mcpUrl')}
 
-        <div class="field-label">出图写法</div>
-        <p class="field-help">AI 把表情发出来时写成什么样。<b>认哪种只有你那个前端知道</b> ——
-          照着它要求的样子选，对不上就换一个，下面的预览会跟着变。</p>
-        <div class="perm-list">
-          ${MCP_FORMATS.map(f=>`
-            <div class="perm-row" data-mcp-fmt="${f.key}">
-              <div class="sel-check-inline ${fmt.key===f.key?'on':''}">${fmt.key===f.key?CHECK_SVG:''}</div>
-              <span class="perm-label">${esc(f.label)}
-                <br><span style="color:var(--text-dim); font-size:11px;">${esc(f.note)}</span></span>
-            </div>`).join('')}
-        </div>
-
-        ${fmt.key === 'plain' ? `
-          <div class="field-label" style="margin-top:12px;">描述词和链接中间放什么</div>
-          <div class="chip-row">
-            ${MCP_SEPS.map(sp=>`<button type="button" class="chip${fmt.sep===sp.v?' active':''}" data-mcp-sep="${esc(sp.v)}">${esc(sp.label)}</button>`).join('')}
-          </div>
-          <input class="field-input" id="mcpSep" placeholder="或者自己填，比如 　→　 " value="${esc(MCP_SEPS.some(sp=>sp.v===fmt.sep)?'':fmt.sep)}" style="margin-top:8px;">` : ''}
-
-        ${fmt.key === 'custom' ? `
-          <input class="field-input" id="mcpTpl" placeholder="例如：[图片:{url}]" value="${esc(fmt.tpl)}" style="margin-top:8px;">
-          <p class="field-help">可用：<b class="mono-hint">{url}</b> 图片直链　<b class="mono-hint">{desc}</b> 描述词　<b class="mono-hint">{n}</b> 序号。
-            必须包含 <b class="mono-hint">{url}</b>，否则按 Markdown 走。</p>` : ''}
-
-        <div class="field-label">AI 会发成这样</div>
-        <div class="mcp-prev">${esc(mcpPreview(fmt))}</div>
-        <p class="field-help">拿这一行跟你那个前端要求的样子对一下，一模一样就对了。</p>
-
         <div class="field-label">我的令牌</div>
+        <p class="field-help">一个前端配一个令牌。<b>出图写法跟着令牌走</b>，各自互不影响 ——
+          这台用 Markdown、那台用「描述词 + 链接」都行。改完立刻生效，地址不用动。</p>
         ${list}
         ${note && mcpTokens.length ? `<p class="field-help">${esc(note)}</p>` : ''}
 
@@ -5278,6 +5317,9 @@ async function openMcpSheet(){
         <select class="field-input" id="mcpDays" style="margin-top:8px;">
           ${MCP_EXPIRY.map(e=>`<option value="${e.days}">${e.label}</option>`).join('')}
         </select>
+        ${mcpEditing === 'new'
+          ? mcpFmtPicker(fmt)
+          : `<div class="btn-row" style="margin-top:8px;"><button type="button" class="btn-outline" data-mcp-edit="new">出图写法：${esc(mcpFmtLabel(fmt))}</button></div>`}
         <div class="btn-row"><button class="btn-solid" id="mcpNew">生成令牌</button></div>
         <p class="field-help">最多同时留 5 个。换个前端就新建一个，不要几个地方共用同一个 —— 出问题时才能只撤销那一个。</p>
 
@@ -5293,29 +5335,40 @@ async function openMcpSheet(){
 
     $('mcpClose').addEventListener('click', ()=>{ mcpFresh = null; $('mcpSheetMask').classList.remove('open'); });
 
+    $('mcpSheetBox').querySelectorAll('[data-mcp-edit]').forEach(b=>{
+      b.addEventListener('click', ()=>{
+        const id = b.dataset.mcpEdit;
+        if(mcpEditing === id){ mcpEditing = null; draw(''); return; }
+        mcpEditing = id;
+        // 打开哪个令牌就先把它现在的写法读进来，别拿上一个的
+        const t = mcpTokens.find(x=>x.id === id);
+        if(t) mcpFmtSet(mcpFmtFromToken(t));
+        draw('');
+      });
+    });
     $('mcpSheetBox').querySelectorAll('[data-mcp-fmt]').forEach(el=>{
       el.addEventListener('click', ()=>{
         // 换个大类不该把已经调好的分隔符和模板丢掉 —— 来回比对时会反复切
         const cur = mcpFmtGet();
         mcpFmtSet({ key: el.dataset.mcpFmt, tpl: cur.tpl, sep: cur.sep });
-        draw('');
+        saveFmt();
       });
     });
     const tplInput = $('mcpTpl');
     // 每敲一个字就重画会打断中文输入法，所以只在离开输入框时存
     if(tplInput) tplInput.addEventListener('change', ()=>{
       mcpFmtSet({ key:'custom', tpl: tplInput.value.trim(), sep: mcpFmtGet().sep });
-      draw('');
+      saveFmt();
     });
     $('mcpSheetBox').querySelectorAll('[data-mcp-sep]').forEach(b=>{
-      b.addEventListener('click', ()=>{ mcpFmtSet({ key:'plain', tpl: mcpFmtGet().tpl, sep: b.dataset.mcpSep }); draw(''); });
+      b.addEventListener('click', ()=>{ mcpFmtSet({ key:'plain', tpl: mcpFmtGet().tpl, sep: b.dataset.mcpSep }); saveFmt(); });
     });
     const sepInput = $('mcpSep');
     // 自己填的分隔符不 trim —— 想要的就可能正是一个空格
     if(sepInput) sepInput.addEventListener('change', ()=>{
       const v = sepInput.value;
       if(v !== '') mcpFmtSet({ key:'plain', tpl: mcpFmtGet().tpl, sep: v });
-      draw('');
+      saveFmt();
     });
     bindCopyRows($('mcpSheetBox'));
     const done = $('mcpDone');
@@ -5324,13 +5377,16 @@ async function openMcpSheet(){
     $('mcpNew').addEventListener('click', async ()=>{
       const btn = $('mcpNew'); btn.disabled = true; btn.textContent = '生成中…';
       const days = Number($('mcpDays').value) || 0;
+      const payload = mcpFmtToToken(mcpFmtGet());
       const { data, error } = await sb.rpc('mcp_create_token', {
         p_name: $('mcpName').value.trim(), p_days: days || null,
+        p_fmt: payload.fmt, p_tpl: payload.tpl,
       });
       btn.disabled = false; btn.textContent = '生成令牌';
       if(error){ showToast('生成失败：'+error.message); return; }
       if(!data || !data.ok){ showToast((data && data.error) || '生成失败'); return; }
       mcpFresh = data.token;
+      mcpEditing = null;
       const { data: rows } = await sb.rpc('mcp_list_tokens');
       mcpTokens = asArray(rows);
       draw('');
