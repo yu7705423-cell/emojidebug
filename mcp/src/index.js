@@ -18,7 +18,7 @@ const NAME = 'yoww';
 // 每次改动都往上加一。线上到底跑的是不是最新的，
 // 打开 /health 看这个数字就知道 —— Cloudflare 后台显示的是它自己的版本号，
 // 跟提交号对不上，别拿那个判断。
-const VERSION = '14';
+const VERSION = '15';
 const SITE = 'https://yoww2026.cn';
 
 // 我们支持的协议版本，新的排前面。客户端报的版本认识就照它的来，
@@ -32,6 +32,21 @@ const CORS = {
   'access-control-expose-headers': 'mcp-session-id, mcp-protocol-version',
   'access-control-max-age': '86400',
 };
+
+/* 浏览器里跑的前端如果用 credentials:'include' 发请求，
+   浏览器会直接拒收 allow-origin: * —— 必须原样回显它的 Origin，
+   还要带上 allow-credentials。这种失败在控制台之外看不见任何东西，
+   表现就是"连不上"，很容易被当成网络问题。
+   我们的鉴权靠令牌不靠 cookie，回显 Origin 不带来任何风险。 */
+function corsFor(req) {
+  const origin = req.headers.get('origin');
+  if (!origin) return CORS;
+  return Object.assign({}, CORS, {
+    'access-control-allow-origin': origin,
+    'access-control-allow-credentials': 'true',
+    vary: 'Origin',
+  });
+}
 
 /* ---------------- 工具定义 ----------------
    description 这几段是给模型看的，不是给人看的。写清楚"什么时候该调我"
@@ -680,18 +695,19 @@ function readToken(req, url) {
   return q ? q.trim() : '';
 }
 
-const json = (body, status = 200, extra = {}) =>
+const json = (body, status = 200, extra = {}, cors = CORS) =>
   new Response(JSON.stringify(body), {
     status,
-    headers: Object.assign({ 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }, CORS, extra),
+    headers: Object.assign({ 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }, cors, extra),
   });
 
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
     const origin = url.origin;
+    const cors = corsFor(req);
 
-    if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
+    if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
 
     const seg = url.pathname.split('/').filter(Boolean);
     const first = seg[0] || '';
@@ -699,9 +715,9 @@ export default {
     // 图片中转：/i/<签名>/<编码过的原链接>.<扩展名>
     if (first === 'i') {
       if (req.method !== 'GET' && req.method !== 'HEAD') {
-        return new Response(null, { status: 405, headers: Object.assign({ allow: 'GET, HEAD' }, CORS) });
+        return new Response(null, { status: 405, headers: Object.assign({ allow: 'GET, HEAD' }, cors) });
       }
-      if (seg.length < 3) return new Response('bad request', { status: 400, headers: CORS });
+      if (seg.length < 3) return new Response('bad request', { status: 400, headers: cors });
       const payload = seg.slice(2).join('/').replace(/\.[a-z0-9]+$/i, '');
       return serveImage(env, url, seg[1], payload);
     }
@@ -713,44 +729,44 @@ export default {
         return json({ ok: true, name: NAME, version: VERSION,
           // 有哪些功能，一眼看得出跑的是哪一版
           has: ['selftest', 'list', 'format_page', 'custom_tpl', 'token_format', 'token_scopes', 'avatars', 'load_emoji_set', 'img_proxy'],
-          tools: TOOLS.map(t => t.name) });
+          tools: TOOLS.map(t => t.name) }, 200, {}, cors);
       }
       if (url.pathname === '/format') {
         return new Response(formatPage(), {
           status: 200,
-          headers: Object.assign({ 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }, CORS),
+          headers: Object.assign({ 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }, cors),
         });
       }
       if (url.pathname === '/list') {
         return new Response(listPage(), {
           status: 200,
-          headers: Object.assign({ 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }, CORS),
+          headers: Object.assign({ 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }, cors),
         });
       }
       if (url.pathname === '/selftest') {
         return new Response(selftest(), {
           status: 200,
-          headers: Object.assign({ 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }, CORS),
+          headers: Object.assign({ 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }, cors),
         });
       }
       return new Response(landing(), {
         status: url.pathname === '/' ? 200 : 404,
-        headers: Object.assign({ 'content-type': 'text/html; charset=utf-8' }, CORS),
+        headers: Object.assign({ 'content-type': 'text/html; charset=utf-8' }, cors),
       });
     }
 
     // 无状态：不发会话 id，也就没有会话可以被劫持。
     // GET（服务器主动推）和 DELETE（关会话）都用不上，按规范回 405。
     if (req.method === 'GET' || req.method === 'DELETE') {
-      return new Response(null, { status: 405, headers: Object.assign({ allow: 'POST, OPTIONS' }, CORS) });
+      return new Response(null, { status: 405, headers: Object.assign({ allow: 'POST, OPTIONS' }, cors) });
     }
     if (req.method !== 'POST') {
-      return new Response(null, { status: 405, headers: Object.assign({ allow: 'POST, OPTIONS' }, CORS) });
+      return new Response(null, { status: 405, headers: Object.assign({ allow: 'POST, OPTIONS' }, cors) });
     }
 
     let body;
     try { body = await req.json(); }
-    catch (e) { return json(rpcErr(null, -32700, 'Parse error'), 400); }
+    catch (e) { return json(rpcErr(null, -32700, 'Parse error'), 400, {}, cors); }
 
     const token = readToken(req, url);
     // 出图写法。默认 Markdown；自带表情包系统、或者会剥掉外链图片的前端
@@ -768,13 +784,13 @@ export default {
         const r = await handleMessage(env, token, m, origin, fmt, tpl);
         if (r) out.push(r);
       }
-      return out.length ? json(out, 200, extra) : new Response(null, { status: 202, headers: CORS });
+      return out.length ? json(out, 200, extra, cors) : new Response(null, { status: 202, headers: cors });
     }
 
     const r = await handleMessage(env, token, body, origin, fmt, tpl);
     // 通知和响应没有 id，规范说回 202 空body
-    if (!r) return new Response(null, { status: 202, headers: CORS });
-    return json(r, 200, extra);
+    if (!r) return new Response(null, { status: 202, headers: cors });
+    return json(r, 200, extra, cors);
   },
 };
 
