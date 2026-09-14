@@ -18,7 +18,7 @@ const NAME = 'yoww';
 // 每次改动都往上加一。线上到底跑的是不是最新的，
 // 打开 /health 看这个数字就知道 —— Cloudflare 后台显示的是它自己的版本号，
 // 跟提交号对不上，别拿那个判断。
-const VERSION = '13';
+const VERSION = '14';
 const SITE = 'https://yoww2026.cn';
 
 // 我们支持的协议版本，新的排前面。客户端报的版本认识就照它的来，
@@ -172,7 +172,7 @@ async function rpc(env, fn, args) {
         authorization: `Bearer ${env.SUPABASE_ANON_KEY}`,
       },
       body: JSON.stringify(args),
-      signal: AbortSignal.timeout(20000),
+      signal: AbortSignal.timeout(8000),
     });
   } catch (e) {
     return { ok: false, error: '连不上服务器，等一下再试' };
@@ -230,11 +230,19 @@ const b64u = {
               atob(s.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0))),
 };
 
+// 密钥导一次就够了。原来每签一个地址都重导一次 —— 一次载入六十张图
+// 就是六十次，白烧时间
+let SIGN_KEY = null;
+async function signKey(env) {
+  if (!SIGN_KEY) {
+    SIGN_KEY = crypto.subtle.importKey(
+      'raw', new TextEncoder().encode(env.IMG_SIGN_KEY || 'yoww'),
+      { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  }
+  return SIGN_KEY;
+}
 async function sign(env, text) {
-  const key = await crypto.subtle.importKey(
-    'raw', new TextEncoder().encode(env.IMG_SIGN_KEY || 'yoww'),
-    { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-  const mac = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(text));
+  const mac = await crypto.subtle.sign('HMAC', await signKey(env), new TextEncoder().encode(text));
   return [...new Uint8Array(mac)].slice(0, 8).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
@@ -456,16 +464,14 @@ async function runTool(env, token, name, args, origin, fmt, tpl) {
       if (!r.ok) return { text: authText(r), err: true };
       list = r.emojis || [];
     } else {
-      // 不挑主题时按包取：一包一包往里装，装够为止。
-      // 这样载入的是成套的，比按词搜出来的零散图更像"一套表情"。
-      const ps = await rpc(env, 'mcp_search_packs', { p_token: token, p_query: '', p_category: '', p_limit: 12 });
-      if (!ps.ok) return { text: authText(ps), err: true };
-      for (const p of ps.packs || []) {
-        if (list.length >= want) break;
-        const one = await rpc(env, 'mcp_get_pack', { p_token: token, p_id: p.id });
-        if (one && one.ok && Array.isArray(one.emojis)) list = list.concat(one.emojis);
-      }
-      list = list.slice(0, want);
+      // 不挑主题就取最新的一批。
+      //
+      // 原来这里是一个包一个包整包拉回来再切 —— 本地测试库只有两个包所以
+      // 没露馅，线上四十多个包、包里还有上百张，前端等不及直接把请求掐了
+      // （Fetch is aborted）。现在数据库那边一条查询就返回最新的 N 张。
+      const r = await rpc(env, 'mcp_recent_emojis', { p_token: token, p_limit: want });
+      if (!r.ok) return { text: authText(r), err: true };
+      list = r.emojis || [];
     }
 
     if (!list.length) return { text: q ? `没找到「${q}」相关的表情，换个词再试。` : '站里还没有表情。', err: true };
@@ -503,13 +509,23 @@ async function runTool(env, token, name, args, origin, fmt, tpl) {
 
     // 顺手把前几个包的头几张图取回来。
     // 不这么做的话，模型调完这个工具手上一张图都没有，多半就拿个站内链接交差了 ——
-    // 用户要的是表情，不是网址。并行发，取不到就算了，不能因为预览失败让整次搜索失败。
-    await Promise.all(packs.slice(0, PREVIEW_PACKS).map(async p => {
-      const one = await rpc(env, 'mcp_get_pack', { p_token: token, p_id: p.id });
-      if (one && one.ok && Array.isArray(one.emojis)) {
-        p.preview = await withProxy(env, one.emojis.slice(0, PREVIEW_EACH), origin);
+    // 用户要的是表情，不是网址。
+    //
+    // 一条查询把这几个包的预览一起取回来。原来是每个包各拉一次整包再切前几张，
+    // 一个包上百张的话为了四张预览白拉一百张，慢到前端会掐请求。
+    // 预览取不到就跳过，不能因为它让整次搜索失败。
+    const head = packs.slice(0, PREVIEW_PACKS);
+    if (head.length) {
+      const pv = await rpc(env, 'mcp_pack_previews', {
+        p_token: token, p_ids: head.map(p => p.id), p_each: PREVIEW_EACH,
+      });
+      if (pv && pv.ok && pv.previews) {
+        await Promise.all(head.map(async p => {
+          const imgs = pv.previews[p.id];
+          if (Array.isArray(imgs) && imgs.length) p.preview = await withProxy(env, imgs, origin);
+        }));
       }
-    }));
+    }
 
     return { text: fmtPacks(packs, fmt, tpl), data: r };
   }
