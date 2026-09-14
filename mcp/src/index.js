@@ -18,7 +18,7 @@ const NAME = 'yoww';
 // 每次改动都往上加一。线上到底跑的是不是最新的，
 // 打开 /health 看这个数字就知道 —— Cloudflare 后台显示的是它自己的版本号，
 // 跟提交号对不上，别拿那个判断。
-const VERSION = '18';
+const VERSION = '19';
 const SITE = 'https://yoww2026.cn';
 
 // 我们支持的协议版本，新的排前面。客户端报的版本认识就照它的来，
@@ -82,14 +82,15 @@ const TOOLS = [
       '用户说「找个头像」「有没有好看的情侣头像」「给你换个头像」时用。\n' +
       '情侣头像是一对两张，返回里会标出来（is_pair），两张要一起发，' +
       '并且说清楚哪张给谁 —— 比如「这对情头，左边给你右边给我」。\n' +
-      '分类只有这五个：男性、女性、情侣·BL、情侣·GL、情侣·BG。想按分类找就填 category，' +
-      '按风格找就把词写进 query（比如「冷白皮」「校园」）。',
+      '分类只有两个：普通（单张）、情侣（一对两张）。' +
+      '性别、性向、风格这些是标签不是分类，写进 query 里搜' +
+      '（比如「男」「BL」「冷白皮」「校园」）。',
     inputSchema: {
       type: 'object',
       properties: {
         query: { type: 'string', description: '风格、标签或标题里的词；留空表示不过滤' },
-        category: { type: 'string', enum: ['男性', '女性', '情侣·BL', '情侣·GL', '情侣·BG'],
-                    description: '按分类筛，留空表示全部' },
+        category: { type: 'string', enum: ['普通', '情侣'],
+                    description: '只分单张和一对。想按性别/性向/风格找，写进 query 而不是这里' },
         limit: { type: 'integer', description: '最多返回几个，默认 20，最多 60' },
         format: { type: 'string', enum: ['markdown', 'url', 'html', 'both'],
                   description: '出图写法。**默认不要传** —— 服务端已经配好了这个环境认的写法。' },
