@@ -136,6 +136,9 @@
   .panel.open{display:block;}
 
   .mono-hint{font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-weight:600;}
+  .mcp-prev{margin-top:6px; padding:10px 12px; border:1px solid var(--border); border-radius:var(--radius-s);
+    background:var(--bg-elev); font:12px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace;
+    white-space:pre-wrap; word-break:break-all;}
   .row-list{border-top:1px solid var(--border-soft);}
   .row-item{display:flex; gap:10px; align-items:flex-start; padding:9px 2px; border-bottom:1px solid var(--border-soft);}
   .thumb{width:40px; height:40px; border-radius:var(--radius-s); overflow:hidden; background:var(--bg-elev); border:1px solid var(--border-soft); flex-shrink:0; position:relative;}
@@ -5113,18 +5116,44 @@ const MCP_URL = MCP_BASE + '/mcp';
 // 所以摆在生成令牌的同一页上，选完直接给一条拼好的地址，
 // 不用让人跑到别处再配一次
 const MCP_FORMATS = [
-  { key:'markdown', label:'Markdown 图片', tpl:'![描述词](链接)',        note:'大多数前端（Cherry Studio、Chatbox…）' },
-  { key:'plain',    label:'描述词 + 链接', tpl:'描述词 链接',            note:'自带表情包的那类前端最常见' },
-  { key:'url',      label:'只发链接',      tpl:'链接',                   note:'会自动把链接变成图的前端' },
-  { key:'html',     label:'HTML img 标签', tpl:'<img src="链接">',       note:'允许 HTML 的前端' },
-  { key:'custom',   label:'自己写',        tpl:'',                       note:'上面都不对时用' },
+  { key:'markdown', label:'Markdown 图片', note:'大多数前端（Cherry Studio、Chatbox…）' },
+  // 「描述词 + 链接」这一类，各家的差别其实只在中间放什么：有的冒号，
+  // 有的空格，有的干脆紧挨着。所以不做成好几个预设，做成一个预设加一排分隔符
+  { key:'plain',    label:'描述词 + 链接', note:'自带表情包的那类前端最常见，中间放什么可以挑' },
+  { key:'url',      label:'只发链接',      note:'会自动把链接变成图的前端' },
+  { key:'html',     label:'HTML img 标签', note:'允许 HTML 的前端' },
+  { key:'custom',   label:'自己写模板',    note:'上面都不对时用' },
+];
+// label 是给人看的，v 是真拼进去的字符
+const MCP_SEPS = [
+  { label:'空格', v:' '   }, { label:'：', v:'：'  }, { label:':', v:': ' },
+  { label:'|',    v:' | ' }, { label:'换行', v:'\n' }, { label:'不加', v:'' },
 ];
 const MCP_FMT_KEY = 'zhp_mcp_fmt_v1';
 function mcpFmtGet(){
-  try{ const v = JSON.parse(localStorage.getItem(MCP_FMT_KEY) || '{}'); return { key: v.key || 'markdown', tpl: v.tpl || '' }; }
-  catch(e){ return { key:'markdown', tpl:'' }; }
+  try{
+    const v = JSON.parse(localStorage.getItem(MCP_FMT_KEY) || '{}');
+    return { key: v.key || 'markdown', tpl: v.tpl || '', sep: v.sep == null ? ' ' : v.sep };
+  }catch(e){ return { key:'markdown', tpl:'', sep:' ' }; }
 }
 function mcpFmtSet(v){ try{ localStorage.setItem(MCP_FMT_KEY, JSON.stringify(v)); }catch(e){} }
+
+// 当前写法对应的模板。plain 按选中的分隔符现拼
+function mcpTpl(f){
+  f = f || mcpFmtGet();
+  if(f.key === 'custom') return f.tpl;
+  if(f.key === 'plain')  return '{desc}' + (f.sep == null ? ' ' : f.sep) + '{url}';
+  if(f.key === 'url')    return '{url}';
+  if(f.key === 'html')   return '<img src="{url}" alt="{desc}">';
+  return '![{desc}]({url})';
+}
+// 让人一眼看见 AI 会发出什么样的一行 —— 拿它跟前端要的比，比读语法快得多
+const MCP_SAMPLE = { desc:'哈哈哈 笑死', url:'https://img.yoww2026.cn/2026/09/k3x9q2mf7p1a.webp' };
+function mcpPreview(f){
+  return mcpTpl(f).replace(/\{url\}/g, MCP_SAMPLE.url)
+                  .replace(/\{desc\}/g, MCP_SAMPLE.desc)
+                  .replace(/\{n\}/g, '1');
+}
 // 选中的写法拼进地址。markdown 是服务端默认，不用带参数
 // 前端加不了请求头时用的那条：令牌接在路径上，参数还得留在最后
 function mcpUrlWithToken(tok){
@@ -5134,8 +5163,10 @@ function mcpUrlWithToken(tok){
 }
 function mcpUrl(){
   const f = mcpFmtGet();
-  if(f.key === 'custom') return f.tpl.includes('{url}') ? MCP_URL + '?tpl=' + encodeURIComponent(f.tpl) : MCP_URL;
-  return f.key === 'markdown' ? MCP_URL : MCP_URL + '?format=' + f.key;
+  if(f.key === 'markdown') return MCP_URL;
+  if(f.key === 'url' || f.key === 'html') return MCP_URL + '?format=' + f.key;
+  const tpl = mcpTpl(f);
+  return tpl.includes('{url}') ? MCP_URL + '?tpl=' + encodeURIComponent(tpl) : MCP_URL;
 }
 const MCP_EXPIRY = [
   { days: 0,   label: '永不过期' },
@@ -5211,20 +5242,32 @@ async function openMcpSheet(){
         ${copyRowHtml('服务地址', mcpUrl(), 'mcpUrl')}
 
         <div class="field-label">出图写法</div>
-        <p class="field-help">AI 把表情发出来时用哪种写法。<b>认哪种只有你那个前端知道</b> ——
-          发出来显示不出图片就换一个试试，选完地址会跟着变，把上面那条重新复制过去即可。</p>
+        <p class="field-help">AI 把表情发出来时写成什么样。<b>认哪种只有你那个前端知道</b> ——
+          照着它要求的样子选，对不上就换一个，下面的预览会跟着变。</p>
         <div class="perm-list">
           ${MCP_FORMATS.map(f=>`
             <div class="perm-row" data-mcp-fmt="${f.key}">
               <div class="sel-check-inline ${fmt.key===f.key?'on':''}">${fmt.key===f.key?CHECK_SVG:''}</div>
-              <span class="perm-label">${esc(f.label)}${f.tpl?`　<span style="color:var(--text-dim); font-size:11px;">${esc(f.tpl)}</span>`:''}
+              <span class="perm-label">${esc(f.label)}
                 <br><span style="color:var(--text-dim); font-size:11px;">${esc(f.note)}</span></span>
             </div>`).join('')}
         </div>
+
+        ${fmt.key === 'plain' ? `
+          <div class="field-label" style="margin-top:12px;">描述词和链接中间放什么</div>
+          <div class="chip-row">
+            ${MCP_SEPS.map(sp=>`<button type="button" class="chip${fmt.sep===sp.v?' active':''}" data-mcp-sep="${esc(sp.v)}">${esc(sp.label)}</button>`).join('')}
+          </div>
+          <input class="field-input" id="mcpSep" placeholder="或者自己填，比如 　→　 " value="${esc(MCP_SEPS.some(sp=>sp.v===fmt.sep)?'':fmt.sep)}" style="margin-top:8px;">` : ''}
+
         ${fmt.key === 'custom' ? `
           <input class="field-input" id="mcpTpl" placeholder="例如：[图片:{url}]" value="${esc(fmt.tpl)}" style="margin-top:8px;">
           <p class="field-help">可用：<b class="mono-hint">{url}</b> 图片直链　<b class="mono-hint">{desc}</b> 描述词　<b class="mono-hint">{n}</b> 序号。
             必须包含 <b class="mono-hint">{url}</b>，否则按 Markdown 走。</p>` : ''}
+
+        <div class="field-label">AI 会发成这样</div>
+        <div class="mcp-prev">${esc(mcpPreview(fmt))}</div>
+        <p class="field-help">拿这一行跟你那个前端要求的样子对一下，一模一样就对了。</p>
 
         <div class="field-label">我的令牌</div>
         ${list}
@@ -5252,15 +5295,26 @@ async function openMcpSheet(){
 
     $('mcpSheetBox').querySelectorAll('[data-mcp-fmt]').forEach(el=>{
       el.addEventListener('click', ()=>{
-        const key = el.dataset.mcpFmt;
-        mcpFmtSet({ key, tpl: key === 'custom' ? mcpFmtGet().tpl : '' });
+        // 换个大类不该把已经调好的分隔符和模板丢掉 —— 来回比对时会反复切
+        const cur = mcpFmtGet();
+        mcpFmtSet({ key: el.dataset.mcpFmt, tpl: cur.tpl, sep: cur.sep });
         draw('');
       });
     });
     const tplInput = $('mcpTpl');
     // 每敲一个字就重画会打断中文输入法，所以只在离开输入框时存
     if(tplInput) tplInput.addEventListener('change', ()=>{
-      mcpFmtSet({ key:'custom', tpl: tplInput.value.trim() });
+      mcpFmtSet({ key:'custom', tpl: tplInput.value.trim(), sep: mcpFmtGet().sep });
+      draw('');
+    });
+    $('mcpSheetBox').querySelectorAll('[data-mcp-sep]').forEach(b=>{
+      b.addEventListener('click', ()=>{ mcpFmtSet({ key:'plain', tpl: mcpFmtGet().tpl, sep: b.dataset.mcpSep }); draw(''); });
+    });
+    const sepInput = $('mcpSep');
+    // 自己填的分隔符不 trim —— 想要的就可能正是一个空格
+    if(sepInput) sepInput.addEventListener('change', ()=>{
+      const v = sepInput.value;
+      if(v !== '') mcpFmtSet({ key:'plain', tpl: mcpFmtGet().tpl, sep: v });
       draw('');
     });
     bindCopyRows($('mcpSheetBox'));
