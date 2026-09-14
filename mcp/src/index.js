@@ -250,31 +250,42 @@ const trunc = (s, n) => { s = String(s == null ? '' : s); return s.length > n ? 
 // 这是「AI 发了个网站链接而不是表情图」最管用的一处修法。
 const oneLine = s => String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
 const altText = s => oneLine(s).replace(/[\[\]]/g, ' ').replace(/\s+/g, ' ').trim() || '表情';
-const imgLine = e => `![${altText(e.desc)}](${e.url})`;
 
 const permLine = p => [p.allow_repost ? '允许二传' : '不允许二传', p.allow_edit ? '允许二改' : '不允许二改']
   .concat(p.other_permission ? ['其他：' + trunc(p.other_permission, 60)] : []).join('、');
 
-const SEND_HINT = '↓ 下面每一行 ![](…) 都是一张图，原样贴进你的回复就能发出去，一次可以发好几张。' +
-                  '用户要的是图，不要只回网站链接。';
+/* 不是每个前端都渲染 Markdown 图片。有的（比如自带表情包系统的那类）
+   会把外链图片剥掉，或者规定了自己的一套写法。所以出图格式做成可切的：
+   在 MCP 地址后面加 ?format=url 之类就能换，不用改代码也不用重新部署。 */
+const FORMATS = {
+  markdown: { label: 'Markdown 图片', line: e => `![${altText(e.desc)}](${e.url})`,
+              hint: '↓ 下面每一行 ![](…) 都是一张图，原样贴进你的回复就能发出去，一次可以发好几张。用户要的是图，不要只回网站链接。' },
+  url:      { label: '纯链接',        line: e => e.url,
+              hint: '↓ 每张图给的是直链，单独一行原样贴进回复即可，这个前端会自己把它变成图。别改写、别加说明文字在同一行。' },
+  both:     { label: '两种都给',      line: e => `![${altText(e.desc)}](${e.url})\n${e.url}`,
+              hint: '↓ 每张图给了两种写法（Markdown 一行、纯链接一行）。挑你所在环境能显示成图片的那一种贴出去，只贴一种，别两种都贴。' },
+};
+const fmtOf = name => FORMATS[name] || FORMATS.markdown;
 
-function fmtEmojis(list, head) {
+function fmtEmojis(list, head, fmt) {
   if (!list.length) return head + '\n（一张都没搜到，换个近义词再试试）';
-  return head + '\n' + SEND_HINT + '\n\n' + list.map((e, i) =>
+  const f = fmtOf(fmt);
+  return head + '\n' + f.hint + '\n\n' + list.map((e, i) =>
     `${i + 1}. ${oneLine(e.desc) || '（没写描述词）'}` +
     (e.pack_title ? `　来自《${oneLine(e.pack_title)}》` : '') +
-    `\n${imgLine(e)}`).join('\n\n');
+    `\n${f.line(e)}`).join('\n\n');
 }
 
 const PREVIEW_PACKS = 6;   // 给几个包配预览图
 const PREVIEW_EACH  = 4;   // 每个包配几张
 
-function fmtPacks(list) {
+function fmtPacks(list, fmt) {
   if (!list.length) return '没找到符合的表情包。';
+  const f = fmtOf(fmt);
   const anyPreview = list.some(p => p.preview && p.preview.length);
   return `找到 ${list.length} 个表情包。\n` +
     (anyPreview
-      ? SEND_HINT + '\n每个包下面附了前几张作预览，想看某个包的全部，再用 get_emoji_pack 取。\n\n'
+      ? f.hint + '\n每个包下面附了前几张作预览，想看某个包的全部，再用 get_emoji_pack 取。\n\n'
       : '要发图的话，挑一个包用 get_emoji_pack 取图，或者直接用 search_emojis 按描述词搜单张。\n\n') +
     list.map((p, i) => {
       const tags = Array.isArray(p.tags) && p.tags.length ? `  标签：${p.tags.join(' ')}` : '';
@@ -283,12 +294,12 @@ function fmtPacks(list) {
              `\n   转载/二改条款（只在用户问起时才提）：${permLine(p)}` +
              `\n   站内页面：${p.link}` +
              ((p.preview && p.preview.length)
-               ? '\n' + p.preview.map(imgLine).join('\n')
+               ? '\n' + p.preview.map(f.line).join('\n')
                : '');
     }).join('\n\n');
 }
 
-async function runTool(env, token, name, args, origin) {
+async function runTool(env, token, name, args, origin, fmt) {
   const a = args && typeof args === 'object' ? args : {};
   const num = (v, d) => (Number.isFinite(+v) ? Math.trunc(+v) : d);
 
@@ -306,7 +317,7 @@ async function runTool(env, token, name, args, origin) {
     const r = await rpc(env, 'mcp_search_emojis', { p_token: token, p_query: q, p_limit: num(a.limit, 40) });
     if (!r.ok) return { text: authText(r), err: true };
     const list = await withProxy(env, r.emojis, origin);
-    return { text: fmtEmojis(list, `搜「${q}」找到 ${list.length} 张：`), data: { ok: true, emojis: list } };
+    return { text: fmtEmojis(list, `搜「${q}」找到 ${list.length} 张：`, fmt), data: { ok: true, emojis: list } };
   }
 
   if (name === 'search_emoji_packs') {
@@ -329,7 +340,7 @@ async function runTool(env, token, name, args, origin) {
       }
     }));
 
-    return { text: fmtPacks(packs), data: r };
+    return { text: fmtPacks(packs, fmt), data: r };
   }
 
   if (name === 'get_emoji_pack') {
@@ -343,7 +354,7 @@ async function runTool(env, token, name, args, origin) {
     const head = `《${p.title}》 by ${p.author || '佚名'}  共 ${r.emoji_count} 张\n` +
                  `转载/二改条款（只在用户问起时才提，不影响你现在发图）：${permLine(p)}\n${p.link}\n`;
     const list = await withProxy(env, r.emojis, origin);
-    return { text: fmtEmojis(list, head), data: Object.assign({}, r, { emojis: list }) };
+    return { text: fmtEmojis(list, head, fmt), data: Object.assign({}, r, { emojis: list }) };
   }
 
   if (name === 'list_categories') {
@@ -380,7 +391,7 @@ function authText(r) {
 const rpcOk  = (id, result) => ({ jsonrpc: '2.0', id, result });
 const rpcErr = (id, code, message) => ({ jsonrpc: '2.0', id, error: { code, message } });
 
-async function handleMessage(env, token, msg, origin) {
+async function handleMessage(env, token, msg, origin, fmt) {
   if (!msg || msg.jsonrpc !== '2.0' || typeof msg.method !== 'string') {
     return rpcErr(msg && msg.id != null ? msg.id : null, -32600, 'Invalid Request');
   }
@@ -402,13 +413,14 @@ async function handleMessage(env, token, msg, origin) {
         if (!who.ok) note = '\n\n⚠️ 令牌无效、已撤销或已过期，现在什么都搜不到。到 ' + SITE + ' 的「我的 → MCP 接口」重新生成一个。';
         else note = `\n\n当前令牌属于「${who.nickname}」。`;
       }
+      const f = fmtOf(fmt);
       return rpcOk(id, {
         protocolVersion: ver,
         capabilities: { tools: { listChanged: false } },
         serverInfo: { name: NAME, title: 'Yoww 表情包', version: VERSION },
         instructions:
           'Yoww 是一个表情包 / 字体分享站。\n' +
-          '用户要表情的时候，**直接把图发出来**：工具返回里 ![](…) 那些行原样贴进你的回复即可，' +
+          `用户要表情的时候，**直接把图发出来**：工具返回里那几行（当前出图写法：${f.label}）原样贴进你的回复即可，` +
           '一次贴好几行就是一次发好几张，像聊天时甩表情一样。不要只回一个网站链接 —— ' +
           '用户要的是图，不是网页。\n' +
           '首选 search_emojis（按描述词搜单张，最直接）。search_emoji_packs 按包搜，' +
@@ -436,7 +448,7 @@ async function handleMessage(env, token, msg, origin) {
           isError: true,
         });
       }
-      const out = await runTool(env, token, p.name, p.arguments, origin);
+      const out = await runTool(env, token, p.name, p.arguments, origin, fmt);
       const res = { content: [{ type: 'text', text: out.text }] };
       if (out.err) res.isError = true;
       if (out.data) res.structuredContent = out.data;
@@ -525,6 +537,9 @@ export default {
     catch (e) { return json(rpcErr(null, -32700, 'Parse error'), 400); }
 
     const token = readToken(req, url);
+    // 出图写法。默认 Markdown；自带表情包系统、或者会剥掉外链图片的前端
+    // 可以在地址后面加 ?format=url / ?format=both 换一种
+    const fmt = url.searchParams.get('format') || '';
     const proto = req.headers.get('mcp-protocol-version') || '';
     const extra = proto && PROTOCOLS.includes(proto) ? { 'mcp-protocol-version': proto } : {};
 
@@ -532,13 +547,13 @@ export default {
     if (Array.isArray(body)) {
       const out = [];
       for (const m of body) {
-        const r = await handleMessage(env, token, m, origin);
+        const r = await handleMessage(env, token, m, origin, fmt);
         if (r) out.push(r);
       }
       return out.length ? json(out, 200, extra) : new Response(null, { status: 202, headers: CORS });
     }
 
-    const r = await handleMessage(env, token, body, origin);
+    const r = await handleMessage(env, token, body, origin, fmt);
     // 通知和响应没有 id，规范说回 202 空body
     if (!r) return new Response(null, { status: 202, headers: CORS });
     return json(r, 200, extra);
@@ -673,6 +688,13 @@ function landing() {
 <li>如果你的前端只能填地址、加不了请求头，就把令牌接在地址后面：
 <pre>https://mcp.yoww2026.cn/mcp/你的令牌</pre></li>
 </ol>
+<h2>图显示不出来的时候</h2>
+<p>有些前端（尤其自带表情包功能的那类）不渲染 Markdown 图片，或者会把外链图片剥掉。
+把服务地址后面加个参数换一种写法：</p>
+<pre>https://mcp.yoww2026.cn/mcp?format=url    纯链接
+https://mcp.yoww2026.cn/mcp?format=both   两种都给，让 AI 自己挑</pre>
+<p>不确定是哪一步出的问题，打开 <a href="/selftest">/selftest</a> 自己跑一遍，
+它不经过 AI，直接告诉你是服务器、令牌、搜索还是图片加载断了。</p>
 <h2>配好之后能干嘛</h2>
 <p>直接跟 AI 说「找几个笑死的表情」「有什么猫猫表情包」「把这个包都发出来」就行。</p>
 <h2>说明</h2>
