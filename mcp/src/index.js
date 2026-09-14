@@ -58,9 +58,10 @@ const TOOLS = [
     description:
       '按关键词、分类搜整包的表情包（不是单张图）。用户说「有什么猫猫表情包」「最近发了哪些包」' +
       '这种想看有哪些包时用。\n' +
-      '⚠️ 这个工具**不返回任何图片**，只有包的标题、作者、张数、使用权限和站内页面地址。' +
-      '用户想看到表情图的话，光调它是不够的：要么挑一个包接着调 get_emoji_pack，' +
-      '要么一开始就改用 search_emojis。别拿一个站内链接就当答复交出去。\n' +
+      '返回每个包的标题、作者、张数、分类，并给前几个包附上几张预览图' +
+      '（同样是拼好的 ![](…)，可以直接发）。想看某个包的全部图，再用 get_emoji_pack。\n' +
+      '如果用户只是想要几张表情、并不关心是哪个包，用 search_emojis 更直接。\n' +
+      '不管用哪个，都别拿一个站内链接当答复交出去 —— 用户要的是图。\n' +
       'query 留空就是按时间倒序列最新的。',
     inputSchema: {
       type: 'object',
@@ -79,8 +80,9 @@ const TOOLS = [
       '按 pack_id 取一个表情包的全部图片，顺序跟站上一致，每张都带一行拼好的 ![](…)，' +
       '原样贴进回复就能发出去。' +
       '用户说「把这个包都发出来」「这个包里有什么」时用。' +
-      '返回里带了使用权限（allow_repost / allow_edit / other_permission）—— ' +
-      '如果用户问能不能转发、能不能改，照这几个字段如实回答，不要自己替作者决定。',
+      '返回里带了使用权限（allow_repost / allow_edit / other_permission），' +
+      '那是给「用户问能不能转载 / 能不能二次修改」时如实回答用的；' +
+      '把图发给用户看不受它们限制，照发就行。',
     inputSchema: {
       type: 'object',
       properties: { pack_id: { type: 'string', description: 'search_emoji_packs 返回的 id' } },
@@ -156,6 +158,9 @@ const oneLine = s => String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
 const altText = s => oneLine(s).replace(/[\[\]]/g, ' ').replace(/\s+/g, ' ').trim() || '表情';
 const imgLine = e => `![${altText(e.desc)}](${e.url})`;
 
+const permLine = p => [p.allow_repost ? '允许二传' : '不允许二传', p.allow_edit ? '允许二改' : '不允许二改']
+  .concat(p.other_permission ? ['其他：' + trunc(p.other_permission, 60)] : []).join('、');
+
 const SEND_HINT = '↓ 下面每一行 ![](…) 都是一张图，原样贴进你的回复就能发出去，一次可以发好几张。' +
                   '用户要的是图，不要只回网站链接。';
 
@@ -167,20 +172,26 @@ function fmtEmojis(list, head) {
     `\n${imgLine(e)}`).join('\n\n');
 }
 
+const PREVIEW_PACKS = 6;   // 给几个包配预览图
+const PREVIEW_EACH  = 4;   // 每个包配几张
+
 function fmtPacks(list) {
   if (!list.length) return '没找到符合的表情包。';
-  // 这个工具拿不到图。说破它，免得模型拿着一个站内链接就交差 ——
-  // 用户想看的是表情，不是一个网页地址。
-  return `找到 ${list.length} 个表情包。注意：这里只有包的信息，没有图片。\n` +
-         `用户想看图的话，挑一个包用 get_emoji_pack 取图再发；或者直接用 search_emojis 按描述词搜单张。\n` +
-         `下面的 yoww2026.cn 链接是站内页面，只在用户明确问「在哪看」「出处」时才给。\n\n` +
+  const anyPreview = list.some(p => p.preview && p.preview.length);
+  return `找到 ${list.length} 个表情包。\n` +
+    (anyPreview
+      ? SEND_HINT + '\n每个包下面附了前几张作预览，想看某个包的全部，再用 get_emoji_pack 取。\n\n'
+      : '要发图的话，挑一个包用 get_emoji_pack 取图，或者直接用 search_emojis 按描述词搜单张。\n\n') +
     list.map((p, i) => {
-      const perm = [p.allow_repost ? '允许二传' : '不允许二传', p.allow_edit ? '允许二改' : '不允许二改']
-        .concat(p.other_permission ? ['其他：' + trunc(p.other_permission, 40)] : []).join('、');
       const tags = Array.isArray(p.tags) && p.tags.length ? `  标签：${p.tags.join(' ')}` : '';
       return `${i + 1}. 《${p.title}》  ${p.emoji_count} 张  by ${p.author || '佚名'}` +
-             `\n   id: ${p.id}\n   分类：${p.category || '未分类'}${tags}\n   ${perm}\n   站内页面：${p.link}`;
-    }).join('\n');
+             `\n   id: ${p.id}\n   分类：${p.category || '未分类'}${tags}` +
+             `\n   转载/二改条款（只在用户问起时才提）：${permLine(p)}` +
+             `\n   站内页面：${p.link}` +
+             ((p.preview && p.preview.length)
+               ? '\n' + p.preview.map(imgLine).join('\n')
+               : '');
+    }).join('\n\n');
 }
 
 async function runTool(env, token, name, args) {
@@ -211,7 +222,17 @@ async function runTool(env, token, name, args) {
       p_limit: num(a.limit, 20), p_offset: num(a.offset, 0),
     });
     if (!r.ok) return { text: authText(r), err: true };
-    return { text: fmtPacks(r.packs || []), data: r };
+    const packs = r.packs || [];
+
+    // 顺手把前几个包的头几张图取回来。
+    // 不这么做的话，模型调完这个工具手上一张图都没有，多半就拿个站内链接交差了 ——
+    // 用户要的是表情，不是网址。并行发，取不到就算了，不能因为预览失败让整次搜索失败。
+    await Promise.all(packs.slice(0, PREVIEW_PACKS).map(async p => {
+      const one = await rpc(env, 'mcp_get_pack', { p_token: token, p_id: p.id });
+      if (one && one.ok && Array.isArray(one.emojis)) p.preview = one.emojis.slice(0, PREVIEW_EACH);
+    }));
+
+    return { text: fmtPacks(packs), data: r };
   }
 
   if (name === 'get_emoji_pack') {
@@ -222,9 +243,8 @@ async function runTool(env, token, name, args) {
     const r = await rpc(env, 'mcp_get_pack', { p_token: token, p_id: id });
     if (!r.ok) return { text: r.error === 'not_found' ? '这个表情包找不到了，可能已经被作者删掉。' : authText(r), err: true };
     const p = r.pack || {};
-    const perm = [p.allow_repost ? '允许二传' : '不允许二传', p.allow_edit ? '允许二改' : '不允许二改']
-      .concat(p.other_permission ? ['其他：' + trunc(p.other_permission, 60)] : []).join('、');
-    const head = `《${p.title}》 by ${p.author || '佚名'}  共 ${r.emoji_count} 张\n使用权限：${perm}\n${p.link}\n`;
+    const head = `《${p.title}》 by ${p.author || '佚名'}  共 ${r.emoji_count} 张\n` +
+                 `转载/二改条款（只在用户问起时才提，不影响你现在发图）：${permLine(p)}\n${p.link}\n`;
     return { text: fmtEmojis(r.emojis || [], head), data: r };
   }
 
@@ -293,11 +313,14 @@ async function handleMessage(env, token, msg) {
           '用户要表情的时候，**直接把图发出来**：工具返回里 ![](…) 那些行原样贴进你的回复即可，' +
           '一次贴好几行就是一次发好几张，像聊天时甩表情一样。不要只回一个网站链接 —— ' +
           '用户要的是图，不是网页。\n' +
-          '首选 search_emojis（按描述词搜单张，直接出图）。search_emoji_packs 只返回包的信息、' +
-          '不含图片，光靠它没法发图，需要图就接着调 get_emoji_pack。\n' +
+          '首选 search_emojis（按描述词搜单张，最直接）。search_emoji_packs 按包搜，' +
+          '会给前几个包附上预览图；想要某个包的全部图就用 get_emoji_pack。三个都会出图。\n' +
           'yoww2026.cn/?collection=… 这类站内链接，只在用户明确问「在哪看」「出处是什么」时才给。\n' +
-          '这些内容都是站里的人自己整理上传的：用户问能不能转发或二次修改时，' +
-          '照返回里的 allow_repost / allow_edit / other_permission 如实说，别自己替作者做主。' + note,
+          '关于使用权限，别理解反了：把图发给正在跟你说话的这个用户看，是这个站最正常的用法，' +
+          '**不需要任何额外许可，不用犹豫，也不用先问**。整个站的东西本来就是给大家取用的。\n' +
+          'allow_repost（二传）/ allow_edit（二改）说的是另一回事 —— 用户拿到之后' +
+          '再以自己的名义发布出去、或者改了再发。只有用户明确问起「这个能不能转载/能不能改」时，' +
+          '才照这几个字段如实告诉他，别自己替作者做主。它们跟你现在发不发图无关。' + note,
       });
     }
     case 'notifications/initialized':
