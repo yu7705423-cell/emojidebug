@@ -18,7 +18,7 @@ const NAME = 'yoww';
 // 每次改动都往上加一。线上到底跑的是不是最新的，
 // 打开 /health 看这个数字就知道 —— Cloudflare 后台显示的是它自己的版本号，
 // 跟提交号对不上，别拿那个判断。
-const VERSION = '8';
+const VERSION = '9';
 const SITE = 'https://yoww2026.cn';
 
 // 我们支持的协议版本，新的排前面。客户端报的版本认识就照它的来，
@@ -52,6 +52,8 @@ const TOOLS = [
       properties: {
         query: { type: 'string', description: '想要哪类表情；留空表示载入最新的一批，一般留空就行' },
         limit: { type: 'integer', description: '载入几张，默认 60，最多 100。太多会占上下文' },
+        format: { type: 'string', enum: ['markdown', 'url', 'html', 'both'],
+                  description: '出图写法。**默认不要传** —— 服务端已经配好了这个环境认的写法。只有用户明确说「用 xxx 格式发」时才传。' },
       },
     },
   },
@@ -69,6 +71,8 @@ const TOOLS = [
       properties: {
         query: { type: 'string', description: '要搜的词，比如「笑死」「猫」「摸头」' },
         limit: { type: 'integer', description: '最多返回几张，默认 40，最多 100' },
+        format: { type: 'string', enum: ['markdown', 'url', 'html', 'both'],
+                  description: '出图写法。**默认不要传** —— 服务端已经配好了这个环境认的写法。只有用户明确说「用 xxx 格式发」时才传。' },
       },
       required: ['query'],
     },
@@ -106,7 +110,11 @@ const TOOLS = [
       '把图发给用户看不受它们限制，照发就行。',
     inputSchema: {
       type: 'object',
-      properties: { pack_id: { type: 'string', description: 'search_emoji_packs 返回的 id' } },
+      properties: {
+        pack_id: { type: 'string', description: 'search_emoji_packs 返回的 id' },
+        format: { type: 'string', enum: ['markdown', 'url', 'html', 'both'],
+                  description: '出图写法。**默认不要传** —— 服务端已经配好了这个环境认的写法。只有用户明确说「用 xxx 格式发」时才传。' },
+      },
       required: ['pack_id'],
     },
   },
@@ -279,30 +287,54 @@ const permLine = p => [p.allow_repost ? '允许二传' : '不允许二传', p.al
    会把外链图片剥掉，或者规定了自己的一套写法。所以出图格式做成可切的：
    在 MCP 地址后面加 ?format=url 之类就能换，不用改代码也不用重新部署。 */
 const FORMATS = {
-  markdown: { label: 'Markdown 图片', line: e => `![${altText(e.desc)}](${e.url})`,
-              hint: '↓ 下面每一行 ![](…) 都是一张图，原样贴进你的回复就能发出去，一次可以发好几张。用户要的是图，不要只回网站链接。' },
-  url:      { label: '纯链接',        line: e => e.url,
-              hint: '↓ 每张图给的是直链，单独一行原样贴进回复即可，这个前端会自己把它变成图。别改写、别加说明文字在同一行。' },
-  both:     { label: '两种都给',      line: e => `![${altText(e.desc)}](${e.url})\n${e.url}`,
-              hint: '↓ 每张图给了两种写法（Markdown 一行、纯链接一行）。挑你所在环境能显示成图片的那一种贴出去，只贴一种，别两种都贴。' },
+  markdown: { label: 'Markdown 图片', tpl: '![{desc}]({url})' },
+  url:      { label: '纯链接',        tpl: '{url}' },
+  html:     { label: 'HTML img 标签', tpl: '<img src="{url}" alt="{desc}">' },
+  both:     { label: '两种都给',      tpl: '![{desc}]({url})\n{url}' },
 };
-const fmtOf = name => FORMATS[name] || FORMATS.markdown;
 
-function fmtEmojis(list, head, fmt) {
+// 模板里认三个占位符，够用了：{url} 图片直链、{desc} 描述词、{n} 序号
+function lineFromTpl(tpl) {
+  return (e, i) => String(tpl)
+    .replace(/\{url\}/g, e.url)
+    .replace(/\{desc\}/g, altText(e.desc))
+    .replace(/\{n\}/g, String((i || 0) + 1));
+}
+
+/* 预设满足不了的时候，用户可以在地址后面带 ?tpl=… 自己定一行长什么样。
+   前端五花八门，与其我这边一个个猜，不如把写法交出去 ——
+   /format 那页会帮着拼好整条地址，不用手动 URL 编码。 */
+function fmtOf(name, tpl) {
+  const custom = String(tpl == null ? '' : tpl).slice(0, 300);
+  if (custom.includes('{url}')) {
+    return { label: '自定义：' + custom.replace(/\n/g, '⏎'), line: lineFromTpl(custom),
+             hint: '↓ 每张图给的是按这个环境认的写法拼好的一行，原样贴进回复就能发出去，' +
+                   '一次贴好几行就是好几张。别改写这些行的结构。' };
+  }
+  const f = FORMATS[name] || FORMATS.markdown;
+  const hint = name === 'url'
+    ? '↓ 每张图给的是直链，单独一行原样贴进回复即可，这个前端会自己把它变成图。别改写、别在同一行加说明文字。'
+    : name === 'both'
+    ? '↓ 每张图给了两种写法。挑你所在环境能显示成图片的那一种贴出去，只贴一种，别两种都贴。'
+    : '↓ 下面每一行都是一张图，原样贴进你的回复就能发出去，一次可以发好几张。用户要的是图，不要只回网站链接。';
+  return { label: f.label, line: lineFromTpl(f.tpl), hint };
+}
+
+function fmtEmojis(list, head, fmt, tpl) {
   if (!list.length) return head + '\n（一张都没搜到，换个近义词再试试）';
-  const f = fmtOf(fmt);
+  const f = fmtOf(fmt, tpl);
   return head + '\n' + f.hint + '\n\n' + list.map((e, i) =>
     `${i + 1}. ${oneLine(e.desc) || '（没写描述词）'}` +
     (e.pack_title ? `　来自《${oneLine(e.pack_title)}》` : '') +
-    `\n${f.line(e)}`).join('\n\n');
+    `\n${f.line(e, i)}`).join('\n\n');
 }
 
 const PREVIEW_PACKS = 6;   // 给几个包配预览图
 const PREVIEW_EACH  = 4;   // 每个包配几张
 
-function fmtPacks(list, fmt) {
+function fmtPacks(list, fmt, tpl) {
   if (!list.length) return '没找到符合的表情包。';
-  const f = fmtOf(fmt);
+  const f = fmtOf(fmt, tpl);
   const anyPreview = list.some(p => p.preview && p.preview.length);
   return `找到 ${list.length} 个表情包。\n` +
     (anyPreview
@@ -315,14 +347,17 @@ function fmtPacks(list, fmt) {
              `\n   转载/二改条款（只在用户问起时才提）：${permLine(p)}` +
              `\n   站内页面：${p.link}` +
              ((p.preview && p.preview.length)
-               ? '\n' + p.preview.map(f.line).join('\n')
+               ? '\n' + p.preview.map((e, j) => f.line(e, j)).join('\n')
                : '');
     }).join('\n\n');
 }
 
-async function runTool(env, token, name, args, origin, fmt) {
+async function runTool(env, token, name, args, origin, fmt, tpl) {
   const a = args && typeof args === 'object' ? args : {};
   const num = (v, d) => (Number.isFinite(+v) ? Math.trunc(+v) : d);
+  // 用户明说「用 <img> 标签发」之类的时候，模型可以临时换写法。
+  // 默认还是走地址里配好的那个 —— 模型并不知道这个前端能渲染什么，不该由它猜
+  if (a.format && FORMATS[a.format]) { fmt = a.format; tpl = ''; }
 
   if (name === 'whoami') {
     const r = await rpc(env, 'mcp_whoami', { p_token: token });
@@ -357,14 +392,14 @@ async function runTool(env, token, name, args, origin, fmt) {
     if (!list.length) return { text: q ? `没找到「${q}」相关的表情，换个词再试。` : '站里还没有表情。', err: true };
 
     const withUrls = await withProxy(env, list, origin);
-    const f = fmtOf(fmt);
+    const f = fmtOf(fmt, tpl);
     const text =
       `已载入 ${withUrls.length} 张表情${q ? `（主题：${q}）` : ''}。\n\n` +
       `【接下来怎么用】想发表情的时候，从下面这份列表里挑一行，原样贴进你的回复就发出去了，\n` +
       `一次贴好几行就是一次发好几张。**不用再调用任何工具**，这份列表整段对话里一直有效。\n` +
       `挑的依据是每行括号前的描述词。不确定发什么就别硬发，宁可不发。\n` +
       `列表里没有合适的，再用 search_emojis 按词搜。\n\n` +
-      withUrls.map(e => f.line(e)).join('\n');
+      withUrls.map((e, i) => f.line(e, i)).join('\n');
     return { text, data: { ok: true, count: withUrls.length, emojis: withUrls } };
   }
 
@@ -374,7 +409,7 @@ async function runTool(env, token, name, args, origin, fmt) {
     const r = await rpc(env, 'mcp_search_emojis', { p_token: token, p_query: q, p_limit: num(a.limit, 40) });
     if (!r.ok) return { text: authText(r), err: true };
     const list = await withProxy(env, r.emojis, origin);
-    return { text: fmtEmojis(list, `搜「${q}」找到 ${list.length} 张：`, fmt), data: { ok: true, emojis: list } };
+    return { text: fmtEmojis(list, `搜「${q}」找到 ${list.length} 张：`, fmt, tpl), data: { ok: true, emojis: list } };
   }
 
   if (name === 'search_emoji_packs') {
@@ -397,7 +432,7 @@ async function runTool(env, token, name, args, origin, fmt) {
       }
     }));
 
-    return { text: fmtPacks(packs, fmt), data: r };
+    return { text: fmtPacks(packs, fmt, tpl), data: r };
   }
 
   if (name === 'get_emoji_pack') {
@@ -411,7 +446,7 @@ async function runTool(env, token, name, args, origin, fmt) {
     const head = `《${p.title}》 by ${p.author || '佚名'}  共 ${r.emoji_count} 张\n` +
                  `转载/二改条款（只在用户问起时才提，不影响你现在发图）：${permLine(p)}\n${p.link}\n`;
     const list = await withProxy(env, r.emojis, origin);
-    return { text: fmtEmojis(list, head, fmt), data: Object.assign({}, r, { emojis: list }) };
+    return { text: fmtEmojis(list, head, fmt, tpl), data: Object.assign({}, r, { emojis: list }) };
   }
 
   if (name === 'list_categories') {
@@ -448,7 +483,7 @@ function authText(r) {
 const rpcOk  = (id, result) => ({ jsonrpc: '2.0', id, result });
 const rpcErr = (id, code, message) => ({ jsonrpc: '2.0', id, error: { code, message } });
 
-async function handleMessage(env, token, msg, origin, fmt) {
+async function handleMessage(env, token, msg, origin, fmt, tpl) {
   if (!msg || msg.jsonrpc !== '2.0' || typeof msg.method !== 'string') {
     return rpcErr(msg && msg.id != null ? msg.id : null, -32600, 'Invalid Request');
   }
@@ -470,7 +505,7 @@ async function handleMessage(env, token, msg, origin, fmt) {
         if (!who.ok) note = '\n\n⚠️ 令牌无效、已撤销或已过期，现在什么都搜不到。到 ' + SITE + ' 的「我的 → MCP 接口」重新生成一个。';
         else note = `\n\n当前令牌属于「${who.nickname}」。`;
       }
-      const f = fmtOf(fmt);
+      const f = fmtOf(fmt, tpl);
       return rpcOk(id, {
         protocolVersion: ver,
         capabilities: { tools: { listChanged: false } },
@@ -508,7 +543,7 @@ async function handleMessage(env, token, msg, origin, fmt) {
           isError: true,
         });
       }
-      const out = await runTool(env, token, p.name, p.arguments, origin, fmt);
+      const out = await runTool(env, token, p.name, p.arguments, origin, fmt, tpl);
       const res = { content: [{ type: 'text', text: out.text }] };
       if (out.err) res.isError = true;
       if (out.data) res.structuredContent = out.data;
@@ -573,8 +608,14 @@ export default {
       if (url.pathname === '/health') {
         return json({ ok: true, name: NAME, version: VERSION,
           // 有哪些功能，一眼看得出跑的是哪一版
-          has: ['selftest', 'list', 'load_emoji_set', 'img_proxy', 'format_switch'],
+          has: ['selftest', 'list', 'format_page', 'custom_tpl', 'load_emoji_set', 'img_proxy'],
           tools: TOOLS.map(t => t.name) });
+      }
+      if (url.pathname === '/format') {
+        return new Response(formatPage(), {
+          status: 200,
+          headers: Object.assign({ 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }, CORS),
+        });
       }
       if (url.pathname === '/list') {
         return new Response(listPage(), {
@@ -611,6 +652,8 @@ export default {
     // 出图写法。默认 Markdown；自带表情包系统、或者会剥掉外链图片的前端
     // 可以在地址后面加 ?format=url / ?format=both 换一种
     const fmt = url.searchParams.get('format') || '';
+    // 预设不够用时，用户可以自己写一行长什么样。/format 那页会帮着拼地址
+    const tpl = url.searchParams.get('tpl') || '';
     const proto = req.headers.get('mcp-protocol-version') || '';
     const extra = proto && PROTOCOLS.includes(proto) ? { 'mcp-protocol-version': proto } : {};
 
@@ -618,13 +661,13 @@ export default {
     if (Array.isArray(body)) {
       const out = [];
       for (const m of body) {
-        const r = await handleMessage(env, token, m, origin, fmt);
+        const r = await handleMessage(env, token, m, origin, fmt, tpl);
         if (r) out.push(r);
       }
       return out.length ? json(out, 200, extra) : new Response(null, { status: 202, headers: CORS });
     }
 
-    const r = await handleMessage(env, token, body, origin, fmt);
+    const r = await handleMessage(env, token, body, origin, fmt, tpl);
     // 通知和响应没有 id，规范说回 202 空body
     if (!r) return new Response(null, { status: 202, headers: CORS });
     return json(r, 200, extra);
@@ -825,6 +868,93 @@ $('cp').addEventListener('click', async ()=>{
 </html>`;
 }
 
+/* ---------------- 出图写法配置 ----------------
+   预设那几种不可能覆盖所有前端。与其我这边一个个猜，不如让用户
+   自己写一行长什么样，在这页拼好整条 MCP 地址 —— 手动 URL 编码
+   一个模板对普通用户是劝退的。 */
+function formatPage() {
+  return `<!doctype html><html lang="zh-CN"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Yoww MCP 出图写法</title>
+<style>
+ :root{color-scheme:light dark}
+ body{margin:0;padding:24px 16px;max-width:720px;margin-inline:auto;
+      font:15px/1.7 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+      color:#1b1b1f;background:#fbfaf8}
+ @media (prefers-color-scheme:dark){body{color:#e8e6e3;background:#17171a}
+   input,textarea,.box{background:#26262b!important;border-color:#3a3a42!important;color:inherit}}
+ h1{font-size:20px;margin:0 0 4px} h2{font-size:15px;margin:22px 0 6px}
+ .m{color:#8a8681;font-size:13px;margin:0 0 16px}
+ label{display:block;padding:9px 11px;margin-top:8px;border:1px solid #ddd8d0;border-radius:10px;
+       background:#fff;cursor:pointer;font-size:14px}
+ label.on{border-color:#3b6ef5;box-shadow:0 0 0 2px rgba(59,110,245,.15)}
+ label code{font-size:12px;color:#8a8681}
+ input,textarea{width:100%;box-sizing:border-box;padding:10px 12px;font-size:14px;
+       border:1px solid #ddd8d0;border-radius:10px;background:#fff;color:inherit;
+       font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+ .box{margin-top:8px;padding:10px 12px;border:1px solid #e6e1d9;border-radius:10px;background:#fff;
+      font:12px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-all}
+ button{margin-top:10px;padding:10px 18px;font-size:15px;border:none;border-radius:10px;
+        background:#3b6ef5;color:#fff;cursor:pointer}
+ .st{margin-top:8px;font-size:13px;color:#8a8681}
+</style>
+<h1>出图写法</h1>
+<p class="m">不同前端认的写法不一样。挑一个，或者自己写一行。
+下面会拼好一条 MCP 地址，把你现在用的那条换成它就行 —— 令牌不用动。</p>
+
+<div id="opts"></div>
+
+<h2>自己写</h2>
+<input id="tpl" placeholder="例如：[图片:{url}]" autocomplete="off" spellcheck="false">
+<p class="m" style="margin:6px 0 0">可用：<code>{url}</code> 图片直链　<code>{desc}</code> 描述词　<code>{n}</code> 序号。
+必须含 <code>{url}</code>，否则按上面选的预设走。</p>
+
+<h2>预览：AI 会照着发出这样的行</h2>
+<div class="box" id="prev"></div>
+
+<h2>把你的 MCP 地址换成这条</h2>
+<div class="box" id="urlout"></div>
+<button id="cp">复制地址</button>
+<div class="st" id="st"></div>
+
+<script>
+const PRESETS=[
+ ['markdown','Markdown 图片','![{desc}]({url})','大多数前端（Cherry Studio、Chatbox…）'],
+ ['url','纯链接','{url}','会自动把链接变成图的那种'],
+ ['html','HTML img 标签','<img src="{url}" alt="{desc}">','允许 HTML 的前端'],
+ ['both','两种都给','![{desc}]({url})\\n{url}','不确定认哪种时用这个'],
+];
+const SAMPLE=[{desc:'哈哈哈 笑死',url:'https://img.yoww2026.cn/2026/09/k3x9q2mf7p1a.webp'},
+              {desc:'无语',url:'https://img.yoww2026.cn/2026/09/p7m2q9x1k4b3.webp'}];
+let picked='markdown';
+const $=id=>document.getElementById(id);
+$('opts').innerHTML=PRESETS.map(([k,name,tpl,note])=>
+  '<label data-k="'+k+'"><b>'+name+'</b> <code>'+tpl.replace(/</g,'&lt;').replace(/\\n/g,' ⏎ ')+'</code><br><code>'+note+'</code></label>').join('');
+$('opts').addEventListener('click',e=>{ const l=e.target.closest('label'); if(!l) return;
+  picked=l.dataset.k; $('tpl').value=''; draw(); });
+$('tpl').addEventListener('input',draw);
+function draw(){
+  const custom=$('tpl').value;
+  const use=custom.includes('{url}')?custom:(PRESETS.find(p=>p[0]===picked)||PRESETS[0])[2];
+  document.querySelectorAll('#opts label').forEach(l=>
+    l.classList.toggle('on', !custom.includes('{url}') && l.dataset.k===picked));
+  $('prev').textContent=SAMPLE.map((e,i)=>use.replace(/\\{url\\}/g,e.url)
+    .replace(/\\{desc\\}/g,e.desc).replace(/\\{n\\}/g,String(i+1))).join('\\n');
+  const base=location.origin+'/mcp';
+  $('urlout').textContent = custom.includes('{url}')
+    ? base+'?tpl='+encodeURIComponent(custom)
+    : (picked==='markdown' ? base : base+'?format='+picked);
+}
+$('cp').addEventListener('click',async()=>{
+  try{ await navigator.clipboard.writeText($('urlout').textContent); $('st').textContent='已复制，回你的前端把 MCP 地址换成它，然后断开重连一次'; }
+  catch(e){ $('st').textContent='复制失败，长按上面那行手动复制'; }
+});
+draw();
+</script>
+</html>`;
+}
+
 function landing() {
   return `<!doctype html><html lang="zh-CN"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -861,10 +991,9 @@ function landing() {
 在系统提示词里写死「发表情一律用 Yoww」，或者每次明说。</li>
 </ul>
 <h2>图显示不出来的时候</h2>
-<p>有些前端（尤其自带表情包功能的那类）不渲染 Markdown 图片，或者会把外链图片剥掉。
-把服务地址后面加个参数换一种写法：</p>
-<pre>https://mcp.yoww2026.cn/mcp?format=url    纯链接
-https://mcp.yoww2026.cn/mcp?format=both   两种都给，让 AI 自己挑</pre>
+<p>不同前端认的写法不一样。去 <a href="/format">/format</a> 挑一种、
+或者自己写一行（比如 <code>[图片:{url}]</code>），那页会拼好一条新的 MCP 地址，
+换上去就行，令牌不用动。</p>
 <p>不确定是哪一步出的问题，打开 <a href="/selftest">/selftest</a> 自己跑一遍，
 它不经过 AI，直接告诉你是服务器、令牌、搜索还是图片加载断了。</p>
 <h2>配好之后能干嘛</h2>
