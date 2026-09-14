@@ -18,7 +18,7 @@ const NAME = 'yoww';
 // 每次改动都往上加一。线上到底跑的是不是最新的，
 // 打开 /health 看这个数字就知道 —— Cloudflare 后台显示的是它自己的版本号，
 // 跟提交号对不上，别拿那个判断。
-const VERSION = '11';
+const VERSION = '12';
 const SITE = 'https://yoww2026.cn';
 
 // 我们支持的协议版本，新的排前面。客户端报的版本认识就照它的来，
@@ -39,6 +39,7 @@ const CORS = {
 const TOOLS = [
   {
     name: 'load_emoji_set',
+    scope: 'emoji',
     title: '一次性载入一批表情备用',
     description:
       '在对话刚开始、或者用户说「用 Yoww 的表情」时，调用这个**一次**，' +
@@ -58,7 +59,31 @@ const TOOLS = [
     },
   },
   {
+    name: 'search_avatars',
+    scope: 'avatar',
+    title: '搜头像',
+    description:
+      '搜站里分享的头像，返回可以直接发出去的图。\n' +
+      '用户说「找个头像」「有没有好看的情侣头像」「给你换个头像」时用。\n' +
+      '情侣头像是一对两张，返回里会标出来（is_pair），两张要一起发，' +
+      '并且说清楚哪张给谁 —— 比如「这对情头，左边给你右边给我」。\n' +
+      '分类只有这五个：男性、女性、情侣·BL、情侣·GL、情侣·BG。想按分类找就填 category，' +
+      '按风格找就把词写进 query（比如「冷白皮」「校园」）。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: '风格、标签或标题里的词；留空表示不过滤' },
+        category: { type: 'string', enum: ['男性', '女性', '情侣·BL', '情侣·GL', '情侣·BG'],
+                    description: '按分类筛，留空表示全部' },
+        limit: { type: 'integer', description: '最多返回几个，默认 20，最多 60' },
+        format: { type: 'string', enum: ['markdown', 'url', 'html', 'both'],
+                  description: '出图写法。**默认不要传** —— 服务端已经配好了这个环境认的写法。' },
+      },
+    },
+  },
+  {
     name: 'search_emojis',
+    scope: 'emoji',
     title: '按描述词搜表情图',
     description:
       '按关键词在整个 Yoww 站里搜表情图片，返回的每张都带一行拼好的 ![](…)，' +
@@ -79,6 +104,7 @@ const TOOLS = [
   },
   {
     name: 'search_emoji_packs',
+    scope: 'emoji',
     title: '搜表情包',
     description:
       '按关键词、分类搜整包的表情包（不是单张图）。用户说「有什么猫猫表情包」「最近发了哪些包」' +
@@ -100,6 +126,7 @@ const TOOLS = [
   },
   {
     name: 'get_emoji_pack',
+    scope: 'emoji',
     title: '取一个表情包里的全部图',
     description:
       '按 pack_id 取一个表情包的全部图片，顺序跟站上一致，每张都带一行拼好的 ![](…)，' +
@@ -120,12 +147,14 @@ const TOOLS = [
   },
   {
     name: 'list_categories',
+    scope: 'emoji',
     title: '看有哪些分类',
     description: '列出站里所有表情包分类和各自的数量。不知道该往哪个方向搜的时候先调它。',
     inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'search_fonts',
+    scope: 'font',
     title: '搜字体',
     description: '搜站里分享的字体，返回名字、分类、下载直链和站内链接。query 留空就是列最新的。',
     inputSchema: {
@@ -396,6 +425,40 @@ async function runTool(env, token, name, args, origin, fmt, tpl) {
     return { text: `令牌有效，属于「${r.nickname}」，出图写法：${cur.label}。`, data: r };
   }
 
+  if (name === 'search_avatars') {
+    const r = await rpc(env, 'mcp_search_avatars', {
+      p_token: token,
+      p_query: String(a.query == null ? '' : a.query).trim(),
+      p_category: String(a.category == null ? '' : a.category).trim(),
+      p_limit: num(a.limit, 20),
+    });
+    if (!r.ok) return { text: authText(r), err: true };
+    const list = r.avatars || [];
+    if (!list.length) return { text: '没找到符合的头像，换个词或者换个分类试试。', data: r };
+
+    const f = fmtOf(fmt, tpl);
+    // 一对情头要两张一起给，并且标清楚哪张是哪张 ——
+    // 不标的话模型只会甩两张图，用户不知道该拿哪张
+    const out = [];
+    for (const p of list) {
+      const one = await withProxy(env, [{ desc: p.title, url: p.url }], origin);
+      const head = `${out.length + 1}. ${oneLine(p.title) || '（没写标题）'}　${p.category || '未分类'}` +
+                   (p.author ? `　by ${p.author}` : '') +
+                   (Array.isArray(p.tags) && p.tags.length ? `　标签：${p.tags.join(' ')}` : '');
+      if (p.is_pair && p.url2) {
+        const two = await withProxy(env, [{ desc: p.title + ' 左', url: p.url }, { desc: p.title + ' 右', url: p.url2 }], origin);
+        out.push(head + '　【情侣头像，一对两张，要一起发并说清哪张给谁】\n' +
+                 two.map((e, i) => f.line(e, i)).join('\n'));
+      } else {
+        out.push(head + '\n' + f.line(one[0], 0));
+      }
+    }
+    return {
+      text: `找到 ${list.length} 个头像。\n${f.hint}\n\n` + out.join('\n\n'),
+      data: r,
+    };
+  }
+
   if (name === 'load_emoji_set') {
     const want = Math.min(Math.max(num(a.limit, 60), 5), 100);
     const q = String(a.query == null ? '' : a.query).trim();
@@ -534,7 +597,9 @@ async function handleMessage(env, token, msg, origin, fmt, tpl) {
         if (!who || !who.ok) {
           note = '\n\n⚠️ 令牌无效、已撤销或已过期，现在什么都搜不到。到 ' + SITE + ' 的「我的 → MCP 接口」重新生成一个。';
         } else {
-          note = `\n\n当前令牌属于「${who.nickname}」。`;
+          const zh = { emoji: '表情包', avatar: '头像', font: '字体' };
+          const on = (who.scopes || []).map(x => zh[x] || x).join('、');
+          note = `\n\n当前令牌属于「${who.nickname}」，能看的范围：${on || '（没开任何一项）'}。`;
           if (!fmt && !tpl) { fmt = who.fmt || ''; tpl = who.tpl || ''; }
         }
       }
@@ -566,8 +631,13 @@ async function handleMessage(env, token, msg, origin, fmt, tpl) {
       return null;
     case 'ping':
       return isNotification ? null : rpcOk(id, {});
-    case 'tools/list':
-      return rpcOk(id, { tools: TOOLS });
+    case 'tools/list': {
+      // 没开的那一类，工具直接不出现在列表里 —— 模型看不见就不会去调，
+      // 也不会拿一句"你没有权限"去烦用户
+      const cfg = token ? await tokenCfg(env, token) : null;
+      const allow = (cfg && cfg.ok && Array.isArray(cfg.scopes)) ? cfg.scopes : ['emoji', 'avatar', 'font'];
+      return rpcOk(id, { tools: TOOLS.filter(t => !t.scope || allow.includes(t.scope)) });
+    }
     case 'tools/call': {
       const p = msg.params || {};
       if (!token) {
@@ -575,6 +645,18 @@ async function handleMessage(env, token, msg, origin, fmt, tpl) {
           content: [{ type: 'text', text: '还没配令牌。到 ' + SITE + ' 的「我的 → MCP 接口」生成一个，填进这个 MCP 服务的配置里。' }],
           isError: true,
         });
+      }
+      const want = TOOLS.find(t => t.name === p.name);
+      if (want && want.scope) {
+        const cfg = await tokenCfg(env, token);
+        const allow = (cfg && cfg.ok && Array.isArray(cfg.scopes)) ? cfg.scopes : null;
+        if (allow && !allow.includes(want.scope)) {
+          const zh = { emoji: '表情包', avatar: '头像', font: '字体' }[want.scope] || want.scope;
+          return rpcOk(id, {
+            content: [{ type: 'text', text: `这个令牌没开「${zh}」。令牌的主人可以到 ${SITE} 的「我的 → MCP 接口」里勾上。` }],
+            isError: true,
+          });
+        }
       }
       const out = await runTool(env, token, p.name, p.arguments, origin, fmt, tpl);
       const res = { content: [{ type: 'text', text: out.text }] };
@@ -641,7 +723,7 @@ export default {
       if (url.pathname === '/health') {
         return json({ ok: true, name: NAME, version: VERSION,
           // 有哪些功能，一眼看得出跑的是哪一版
-          has: ['selftest', 'list', 'format_page', 'custom_tpl', 'token_format', 'load_emoji_set', 'img_proxy'],
+          has: ['selftest', 'list', 'format_page', 'custom_tpl', 'token_format', 'token_scopes', 'avatars', 'load_emoji_set', 'img_proxy'],
           tools: TOOLS.map(t => t.name) });
       }
       if (url.pathname === '/format') {
