@@ -1,0 +1,19 @@
+{
+  // Yoww 的 MCP 接口。跟主站是两个完全独立的 Worker ——
+  // 这边出任何问题都影响不到 yoww2026.cn。
+  //
+  // 部署：在这个目录里跑 `npx wrangler deploy`
+  // 然后到 Cloudflare 后台给这个 Worker 绑一个自定义域名 mcp.yoww2026.cn
+  "name": "yoww-mcp",
+  "main": "src/index.js",
+  "compatibility_date": "2026-09-09",
+
+  "vars": {
+    "SUPABASE_URL": "https://mejkhrxqdlybfatzecsc.supabase.co",
+
+    // 跟主站用的是同一把公开 key —— index.html 里就有一份，浏览器人人可见。
+    // 它只说明"请求发给哪个项目"，不代表任何权限：
+    // MCP 的内容函数第一个参数是用户令牌，没令牌光有这把 key 读不到任何东西。
+    "SUPABASE_ANON_KEY": "sb_publishable_21TWA4F0KgENzkYF7TopFA_0G8mrbay"
+  }
+}

@@ -821,6 +821,12 @@
         <span class="n" id="repoEntryCount"></span>
         <svg class="arr" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
       </button>
+      <button class="entry-row" id="openMcpBtn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/><path d="M8 10h.01M12 10h.01M16 10h.01"/></svg>
+        <span class="t">MCP 接口</span>
+        <span class="n">给 AI 用</span>
+        <svg class="arr" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+      </button>
       <div class="ig-tabbar">
         <button class="ig-tab active" data-tab="works" aria-label="作品"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg></button>
         <button class="ig-tab" data-tab="likes" aria-label="点赞"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20s-7-4.4-9.5-9A5.5 5.5 0 0 1 12 5.5 5.5 5.5 0 0 1 21.5 11c-2.5 4.6-9.5 9-9.5 9z"/></svg></button>
@@ -1116,6 +1122,11 @@
   </div>
 
   <!-- generic confirm sheet (deletes) -->
+  <!-- MCP 接口：生成给 AI 前端用的令牌 -->
+  <div class="sheet-mask" id="mcpSheetMask">
+    <div class="sheet-box" id="mcpSheetBox"></div>
+  </div>
+
   <div class="sheet-mask" id="confirmSheetMask">
     <div class="sheet-box" id="confirmSheetBox"></div>
   </div>
@@ -5087,6 +5098,146 @@ function openRepoSettingsSheet(){
     });
   }
 }
+
+/* ===================== MCP 接口 =====================
+   给接了 MCP 的 AI 前端（Cherry Studio / Chatbox / LobeChat 之类）用的。
+   用户不用再「从这儿导出、再导入到那边」，AI 直接按描述词搜图拿链接。
+
+   令牌代表用户本人，能看到的跟他自己登录时一模一样，不会更多 ——
+   接口那边根本没有留言、通知、我的仓库、成员名单对应的功能。
+   原文只在生成的那一次显示，库里存的是 sha256。 */
+const MCP_URL = 'https://mcp.yoww2026.cn/mcp';
+const MCP_EXPIRY = [
+  { days: 0,   label: '永不过期' },
+  { days: 30,  label: '30 天后过期' },
+  { days: 90,  label: '90 天后过期' },
+  { days: 365, label: '一年后过期' },
+];
+let mcpTokens = [];
+let mcpFresh = null;   // 刚生成还没被收起来的那一个，原文只在这儿留一会
+
+function mcpTimeNote(t){
+  const parts = [];
+  parts.push('创建于 ' + timeAgo(t.created_at));
+  parts.push(t.last_used_at ? '最近用过 ' + timeAgo(t.last_used_at) : '还没用过');
+  if(t.expires_at) parts.push(t.expired ? '已过期' : '到期 ' + new Date(t.expires_at).toLocaleDateString());
+  return parts.join('　·　');
+}
+
+async function openMcpSheet(){
+  if(!currentUserId){ showToast('请先登录'); return; }
+  mcpFresh = null;
+  $('mcpSheetMask').classList.add('open');
+  draw('加载中…');
+  const { data, error } = await sb.rpc('mcp_list_tokens');
+  if(error){
+    // 这套 SQL 还没在 Supabase 里跑过的时候就是这个错。
+    // 别把原始报错甩给用户，他看不懂也修不了。
+    draw(/does not exist|schema cache/i.test(error.message || '')
+      ? '这个功能还没开通，等站长开一下。'
+      : '加载失败：' + error.message);
+    return;
+  }
+  mcpTokens = asArray(data);
+  draw('');
+
+  function draw(note){
+    const list = mcpTokens.length
+      ? `<div class="row-list">${mcpTokens.map(t=>`
+          <div class="row-item">
+            <div class="row-main">
+              <div style="font-size:13px; font-weight:500;">${esc(t.name || '未命名令牌')}</div>
+              <div style="font-size:11px; color:var(--text-dim); font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${esc(t.prefix)}…</div>
+              <div style="font-size:11px; color:var(--text-dim); margin-top:1px;">${esc(mcpTimeNote(t))}</div>
+            </div>
+            <button class="row-act-sm" data-mcp-del="${esc(t.id)}">撤销</button>
+          </div>`).join('')}</div>`
+      : (note ? `<p class="field-help">${esc(note)}</p>` : '<p class="field-help">还没有令牌。</p>');
+
+    // 刚生成的那一个单独拿出来放最上面：原文只有这一次机会能看到
+    const fresh = mcpFresh ? `
+      <div class="field-label" style="margin-top:0;">令牌已生成</div>
+      <p class="field-help" style="color:#c0392b;"><b>只显示这一次。</b>现在就复制走，关掉这个页面就再也看不到了（丢了也不要紧，撤销掉重新生成一个就行）。</p>
+      ${copyRowHtml('令牌', mcpFresh, 'mcpTok')}
+      <div class="field-label">填到你的 AI 前端里</div>
+      <p class="field-help">添加一个 MCP 服务，类型选 <b>Streamable HTTP</b>（不是 stdio），然后照下面两行填。</p>
+      ${copyRowHtml('服务地址', MCP_URL, 'mcpUrl')}
+      ${copyRowHtml('请求头', 'Authorization: Bearer ' + mcpFresh, 'mcpHdr')}
+      <p class="field-help">如果你的前端只能填地址、加不了请求头，就改填这一条，把令牌接在地址后面：</p>
+      ${copyRowHtml('地址（带令牌）', MCP_URL + '/' + mcpFresh, 'mcpUrl2')}
+      <div class="btn-row"><button class="btn-outline" id="mcpDone">我存好了</button></div>
+      <div style="height:6px;"></div>` : '';
+
+    $('mcpSheetBox').innerHTML = `
+      <div class="sheet-head"><span class="t">MCP 接口</span><button class="icon-btn" id="mcpClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button></div>
+      <div class="sheet-scroll">
+        ${fresh}
+        ${mcpFresh ? '' : `
+        <p class="field-help" style="margin-top:0;">如果你在用接了 MCP 的 AI 前端（Cherry Studio、Chatbox、LobeChat 之类），
+          可以生成一个令牌填进去。之后直接跟 AI 说「找几个笑死的表情」，它会自己来这儿搜，
+          <b>不用再导出一遍又导入一遍</b>。</p>`}
+
+        <div class="field-label">我的令牌</div>
+        ${list}
+        ${note && mcpTokens.length ? `<p class="field-help">${esc(note)}</p>` : ''}
+
+        <div class="field-label">新建令牌</div>
+        <input class="field-input" id="mcpName" placeholder="给它起个名字，比如「Cherry Studio」" maxlength="40">
+        <select class="field-input" id="mcpDays" style="margin-top:8px;">
+          ${MCP_EXPIRY.map(e=>`<option value="${e.days}">${e.label}</option>`).join('')}
+        </select>
+        <div class="btn-row"><button class="btn-solid" id="mcpNew">生成令牌</button></div>
+        <p class="field-help">最多同时留 5 个。换个前端就新建一个，不要几个地方共用同一个 —— 出问题时才能只撤销那一个。</p>
+
+        <div class="field-label">这个令牌能干什么</div>
+        <p class="field-help">令牌代表你本人，<b>能看到的跟你自己登录时一模一样，不会更多</b>：表情包、字体、描述词、分类。
+          留言、通知、我的仓库、成员名单这些，这个接口里<b>没有对应的功能</b>，取不到。<br>
+          它也<b>只能看，不能改</b>：发不了作品、删不了东西、留不了言。<br>
+          随时可以在这里撤销，撤销之后立刻失效。</p>
+        <p class="field-help">站里的东西都是大家自己整理上传的。AI 那边会拿到每个作品标的使用权限，
+          转发和二次修改还是照作者写的来。</p>
+        <div style="height:24px;"></div>
+      </div>`;
+
+    $('mcpClose').addEventListener('click', ()=>{ mcpFresh = null; $('mcpSheetMask').classList.remove('open'); });
+    bindCopyRows($('mcpSheetBox'));
+    const done = $('mcpDone');
+    if(done) done.addEventListener('click', ()=>{ mcpFresh = null; draw(''); });
+
+    $('mcpNew').addEventListener('click', async ()=>{
+      const btn = $('mcpNew'); btn.disabled = true; btn.textContent = '生成中…';
+      const days = Number($('mcpDays').value) || 0;
+      const { data, error } = await sb.rpc('mcp_create_token', {
+        p_name: $('mcpName').value.trim(), p_days: days || null,
+      });
+      btn.disabled = false; btn.textContent = '生成令牌';
+      if(error){ showToast('生成失败：'+error.message); return; }
+      if(!data || !data.ok){ showToast((data && data.error) || '生成失败'); return; }
+      mcpFresh = data.token;
+      const { data: rows } = await sb.rpc('mcp_list_tokens');
+      mcpTokens = asArray(rows);
+      draw('');
+      $('mcpSheetBox').querySelector('.sheet-scroll').scrollTop = 0;
+    });
+
+    $('mcpSheetBox').querySelectorAll('[data-mcp-del]').forEach(b=>{
+      b.addEventListener('click', ()=>{
+        const id = b.dataset.mcpDel;
+        const t = mcpTokens.find(x=>x.id === id);
+        openConfirmSheet('撤销令牌', `「${(t && t.name) || '这个令牌'}」撤销后立刻失效，填了它的那个 AI 前端会马上搜不到东西。`,
+          '撤销', async ()=>{
+            b.disabled = true; b.textContent = '撤销中…';
+            const { data, error } = await sb.rpc('mcp_revoke_token', { p_id: id });
+            if(error || !data || !data.ok){ showToast('撤销失败'); b.disabled = false; b.textContent = '撤销'; return; }
+            mcpTokens = mcpTokens.filter(x=>x.id !== id);
+            showToast('已撤销');
+            draw('');
+          });
+      });
+    });
+  }
+}
+$('openMcpBtn').addEventListener('click', openMcpSheet);
 
 /* ===================== my (IG-style) ===================== */
 let myTab = 'works';
