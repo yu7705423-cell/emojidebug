@@ -18,7 +18,7 @@ const NAME = 'yoww';
 // 每次改动都往上加一。线上到底跑的是不是最新的，
 // 打开 /health 看这个数字就知道 —— Cloudflare 后台显示的是它自己的版本号，
 // 跟提交号对不上，别拿那个判断。
-const VERSION = '12';
+const VERSION = '13';
 const SITE = 'https://yoww2026.cn';
 
 // 我们支持的协议版本，新的排前面。客户端报的版本认识就照它的来，
@@ -151,19 +151,6 @@ const TOOLS = [
     title: '看有哪些分类',
     description: '列出站里所有表情包分类和各自的数量。不知道该往哪个方向搜的时候先调它。',
     inputSchema: { type: 'object', properties: {} },
-  },
-  {
-    name: 'search_fonts',
-    scope: 'font',
-    title: '搜字体',
-    description: '搜站里分享的字体，返回名字、分类、下载直链和站内链接。query 留空就是列最新的。',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        query: { type: 'string', description: '字体名或作者昵称；留空表示不过滤' },
-        limit: { type: 'integer', description: '最多返回几个，默认 20，最多 50' },
-      },
-    },
   },
   {
     name: 'whoami',
@@ -547,21 +534,6 @@ async function runTool(env, token, name, args, origin, fmt, tpl) {
     return { text: '分类：\n' + (r.categories || []).map(c => `· ${c.name}（${c.pack_count}）`).join('\n'), data: r };
   }
 
-  if (name === 'search_fonts') {
-    const r = await rpc(env, 'mcp_search_fonts', {
-      p_token: token, p_query: String(a.query == null ? '' : a.query).trim(), p_limit: num(a.limit, 20),
-    });
-    if (!r.ok) return { text: authText(r), err: true };
-    const list = r.fonts || [];
-    if (!list.length) return { text: '没找到符合的字体。', data: r };
-    return {
-      text: `找到 ${list.length} 个字体：\n` + list.map((f, i) =>
-        `${i + 1}. ${f.name}  分类：${f.category || '未分类'}  by ${f.author || '佚名'}` +
-        `\n   下载：${f.url || '（作者没填链接）'}\n   ${f.link}`).join('\n'),
-      data: r,
-    };
-  }
-
   return { text: '没有这个工具：' + name, err: true };
 }
 
@@ -597,7 +569,7 @@ async function handleMessage(env, token, msg, origin, fmt, tpl) {
         if (!who || !who.ok) {
           note = '\n\n⚠️ 令牌无效、已撤销或已过期，现在什么都搜不到。到 ' + SITE + ' 的「我的 → MCP 接口」重新生成一个。';
         } else {
-          const zh = { emoji: '表情包', avatar: '头像', font: '字体' };
+          const zh = { emoji: '表情包', avatar: '头像' };
           const on = (who.scopes || []).map(x => zh[x] || x).join('、');
           note = `\n\n当前令牌属于「${who.nickname}」，能看的范围：${on || '（没开任何一项）'}。`;
           if (!fmt && !tpl) { fmt = who.fmt || ''; tpl = who.tpl || ''; }
@@ -609,7 +581,7 @@ async function handleMessage(env, token, msg, origin, fmt, tpl) {
         capabilities: { tools: { listChanged: false } },
         serverInfo: { name: NAME, title: 'Yoww 表情包', version: VERSION },
         instructions:
-          'Yoww 是一个表情包 / 字体分享站。\n' +
+          'Yoww 是一个表情包 / 头像分享站。\n' +
           `用户要表情的时候，**直接把图发出来**：工具返回里那几行（当前出图写法：${f.label}）原样贴进你的回复即可，` +
           '一次贴好几行就是一次发好几张，像聊天时甩表情一样。不要只回一个网站链接 —— ' +
           '用户要的是图，不是网页。\n' +
@@ -617,7 +589,8 @@ async function handleMessage(env, token, msg, origin, fmt, tpl) {
           '之后整段对话里想发表情就从那批里挑一行贴出去，不用再调工具。' +
           '这样发表情是零成本的，该发就发，别因为"要先查"而放弃。\n' +
           '载入的那批里没有合适的，再用 search_emojis 按词搜单张；' +
-          'search_emoji_packs 按包搜、会附预览图；get_emoji_pack 取某个包的全部。都会出图。\n' +
+          'search_emoji_packs 按包搜、会附预览图；get_emoji_pack 取某个包的全部；' +
+          'search_avatars 搜头像。都会出图。\n' +
           'yoww2026.cn/?collection=… 这类站内链接，只在用户明确问「在哪看」「出处是什么」时才给。\n' +
           '关于使用权限，别理解反了：把图发给正在跟你说话的这个用户看，是这个站最正常的用法，' +
           '**不需要任何额外许可，不用犹豫，也不用先问**。整个站的东西本来就是给大家取用的。\n' +
@@ -635,7 +608,7 @@ async function handleMessage(env, token, msg, origin, fmt, tpl) {
       // 没开的那一类，工具直接不出现在列表里 —— 模型看不见就不会去调，
       // 也不会拿一句"你没有权限"去烦用户
       const cfg = token ? await tokenCfg(env, token) : null;
-      const allow = (cfg && cfg.ok && Array.isArray(cfg.scopes)) ? cfg.scopes : ['emoji', 'avatar', 'font'];
+      const allow = (cfg && cfg.ok && Array.isArray(cfg.scopes)) ? cfg.scopes : ['emoji', 'avatar'];
       return rpcOk(id, { tools: TOOLS.filter(t => !t.scope || allow.includes(t.scope)) });
     }
     case 'tools/call': {
@@ -651,7 +624,7 @@ async function handleMessage(env, token, msg, origin, fmt, tpl) {
         const cfg = await tokenCfg(env, token);
         const allow = (cfg && cfg.ok && Array.isArray(cfg.scopes)) ? cfg.scopes : null;
         if (allow && !allow.includes(want.scope)) {
-          const zh = { emoji: '表情包', avatar: '头像', font: '字体' }[want.scope] || want.scope;
+          const zh = { emoji: '表情包', avatar: '头像' }[want.scope] || want.scope;
           return rpcOk(id, {
             content: [{ type: 'text', text: `这个令牌没开「${zh}」。令牌的主人可以到 ${SITE} 的「我的 → MCP 接口」里勾上。` }],
             isError: true,
@@ -862,18 +835,26 @@ $('go').addEventListener('click', async ()=>{
     d=step('3. 工具列表');
     const tl=await call(tok,{jsonrpc:'2.0',id:2,method:'tools/list'});
     const names=((tl.json&&tl.json.result&&tl.json.result.tools)||[]).map(t=>t.name);
-    // 别写死数量：加一个工具就会让这一步自己判自己不合格。看关键的几个在不在就够了
-    const need=['load_emoji_set','search_emojis','get_emoji_pack'];
-    const miss=need.filter(n=>!names.includes(n));
-    mark(d,!miss.length,names.length+' 个：'+names.join('、')+(miss.length?'　缺：'+miss.join('、'):''));
+    // 工具表是按令牌开的权限过滤过的，所以这里不能写死要有哪几个 ——
+    // 只开头像的令牌本来就看不到表情那几个，那是对的，不是错
+    const hasEmoji=names.includes('search_emojis'), hasAvatar=names.includes('search_avatars');
+    mark(d,hasEmoji||hasAvatar,names.length+' 个：'+names.join('、')
+      +(hasEmoji||hasAvatar?'':'　这个令牌一项都没开，去站里勾一下'));
+    if(!hasEmoji&&!hasAvatar) return;
 
-    d=step('4. 搜图');
-    const cr=await call(tok,{jsonrpc:'2.0',id:3,method:'tools/call',params:{name:'search_emojis',arguments:{query:q,limit:8}}});
+    d=step(hasEmoji?'4. 搜表情':'4. 搜头像');
+    const toolName=hasEmoji?'search_emojis':'search_avatars';
+    const args=hasEmoji?{query:q,limit:8}:{limit:8};
+    const cr=await call(tok,{jsonrpc:'2.0',id:3,method:'tools/call',params:{name:toolName,arguments:args}});
     const res=cr.json&&cr.json.result;
-    const emo=(res&&res.structuredContent&&res.structuredContent.emojis)||[];
-    mark(d,!!emo.length,emo.length?('搜「'+q+'」拿到 '+emo.length+' 张'):'一张都没拿到',
+    const sc=(res&&res.structuredContent)||{};
+    // 头像那边情侣是一对两张，两张都要验
+    const emo=hasEmoji ? (sc.emojis||[])
+      : (sc.avatars||[]).flatMap(a=>[{url:a.url,desc:a.title}].concat(a.url2?[{url:a.url2,desc:a.title+' 右'}]:[]));
+    mark(d,!!emo.length,emo.length?('拿到 '+emo.length+' 张'):'一张都没拿到',
          emo.length?'':((res&&res.content&&res.content[0]&&res.content[0].text)||cr.raw).slice(0,300));
     if(!emo.length) return;
+
 
     d=step('5. 图片能不能真的加载出来');
     const g=document.createElement('div'); g.className='grid'; d.appendChild(g);
