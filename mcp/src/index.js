@@ -18,7 +18,7 @@ const NAME = 'yoww';
 // 每次改动都往上加一。线上到底跑的是不是最新的，
 // 打开 /health 看这个数字就知道 —— Cloudflare 后台显示的是它自己的版本号，
 // 跟提交号对不上，别拿那个判断。
-const VERSION = '20';
+const VERSION = '21';
 const SITE = 'https://yoww2026.cn';
 
 // 我们支持的协议版本，新的排前面。客户端报的版本认识就照它的来，
@@ -67,7 +67,7 @@ const TOOLS = [
       type: 'object',
       properties: {
         query: { type: 'string', description: '想要哪类表情；留空表示载入最新的一批，一般留空就行' },
-        limit: { type: 'integer', description: '载入几张，默认 60，最多 100。太多会占上下文' },
+        limit: { type: 'integer', description: '载入几张，默认 20，最多 40。**别往大了调** —— 有些前端会把每张图都预取一遍，一次给太多它会直接超时，什么都收不到' },
         format: { type: 'string', enum: ['markdown', 'url', 'html', 'both'],
                   description: '出图写法。**默认不要传** —— 服务端已经配好了这个环境认的写法。只有用户明确说「用 xxx 格式发」时才传。' },
       },
@@ -91,7 +91,7 @@ const TOOLS = [
         query: { type: 'string', description: '风格、标签或标题里的词；留空表示不过滤' },
         category: { type: 'string', enum: ['普通', '情侣'],
                     description: '只分单张和一对。想按性别/性向/风格找，写进 query 而不是这里' },
-        limit: { type: 'integer', description: '最多返回几个，默认 20，最多 60' },
+        limit: { type: 'integer', description: '最多返回几个，默认 8，最多 20' },
         format: { type: 'string', enum: ['markdown', 'url', 'html', 'both'],
                   description: '出图写法。**默认不要传** —— 服务端已经配好了这个环境认的写法。' },
       },
@@ -111,7 +111,7 @@ const TOOLS = [
       type: 'object',
       properties: {
         query: { type: 'string', description: '要搜的词，比如「笑死」「猫」「摸头」' },
-        limit: { type: 'integer', description: '最多返回几张，默认 40，最多 100' },
+        limit: { type: 'integer', description: '最多返回几张，默认 8，最多 20。发表情一次挑一两张就够，别一次要一堆' },
         format: { type: 'string', enum: ['markdown', 'url', 'html', 'both'],
                   description: '出图写法。**默认不要传** —— 服务端已经配好了这个环境认的写法。只有用户明确说「用 xxx 格式发」时才传。' },
       },
@@ -143,11 +143,13 @@ const TOOLS = [
   {
     name: 'get_emoji_pack',
     scope: 'emoji',
-    title: '取一个表情包里的全部图',
+    title: '取一个表情包里的图',
     description:
-      '按 pack_id 取一个表情包的全部图片，顺序跟站上一致，每张都带一行拼好的 ![](…)，' +
+      '按 pack_id 取一个表情包里的图片，顺序跟站上一致，每张都带一行拼好的 ![](…)，' +
       '原样贴进回复就能发出去。' +
       '用户说「把这个包都发出来」「这个包里有什么」时用。' +
+      '默认只给前 24 张 —— 一次给太多，有些前端会因为逐张预取而超时，' +
+      '那样用户一张都收不到。用户明确说「全都要」再把 limit 调大。' +
       '返回里带了使用权限（allow_repost / allow_edit / other_permission），' +
       '那是给「用户问能不能转载 / 能不能二次修改」时如实回答用的；' +
       '把图发给用户看不受它们限制，照发就行。',
@@ -155,6 +157,7 @@ const TOOLS = [
       type: 'object',
       properties: {
         pack_id: { type: 'string', description: 'search_emoji_packs 返回的 id' },
+        limit: { type: 'integer', description: '取前几张，默认 24，最多 60。用户没明说「全都要」就别调大' },
         format: { type: 'string', enum: ['markdown', 'url', 'html', 'both'],
                   description: '出图写法。**默认不要传** —— 服务端已经配好了这个环境认的写法。只有用户明确说「用 xxx 格式发」时才传。' },
       },
@@ -293,10 +296,50 @@ async function proxyUrl(env, raw, origin) {
   return `${secure}/i/${await sign(env, payload)}/${payload}.${ext}`;
 }
 
+/* 把图提前烘进边缘缓存。
+
+   光把张数砍下来还不够：前端逐张预取的时候，每一张都还是要我们现去
+   第三方图床取一趟，慢的图床一张一两秒。所以在返回工具结果的同时，
+   顺手在后台把这几张先取一遍 —— 用的 cf 选项跟 serveImage 里一模一样，
+   落的是同一个缓存条目。等前端真来取的时候就直接命中，不用再等上游。
+
+   几条自我约束：
+   · 必须挂在 waitUntil 上。不挂，响应一发出去这些请求就被掐了。
+   · 有配额。一个请求能发的子请求有上限，烘过头会把正事挤掉，
+     所以每个请求最多烘这么多张，多出来的就让它冷着。
+   · 必须真的把 body 读完，不然缓存条目写不完整，等于白烘。
+   · 全程 catch 到底。烘失败是小事，绝不能影响给模型的那份结果。 */
+const WARM_BUDGET = 12;
+const WARMED = new WeakMap();
+function warm(env, ctx, urls) {
+  if (!ctx || typeof ctx.waitUntil !== 'function') return;
+  let used = WARMED.get(ctx) || 0;
+  for (const raw of urls || []) {
+    if (used >= WARM_BUDGET) break;
+    const u = String(raw == null ? '' : raw).trim();
+    if (!/^https?:\/\//i.test(u)) continue;
+    used++;
+    try {
+      ctx.waitUntil(
+        fetch(u, {
+          referrer: '', referrerPolicy: 'no-referrer',
+          headers: { accept: 'image/*,*/*;q=0.8', 'user-agent': 'Mozilla/5.0 (compatible; YowwMCP/1.0)' },
+          redirect: 'follow',
+          signal: AbortSignal.timeout(10000),
+          cf: { cacheEverything: true, cacheTtl: 86400 },
+        }).then(r => (r.ok ? r.arrayBuffer() : null)).catch(() => {})
+      );
+    } catch (e) { /* ctx 已经关了之类的，烘不成就算了 */ }
+  }
+  WARMED.set(ctx, used);
+}
+
 // 一批图一起换成中转地址，顺手把取不到的丢掉
-async function withProxy(env, list, origin) {
-  return Promise.all((list || []).map(async e =>
+async function withProxy(env, list, origin, ctx) {
+  const out = await Promise.all((list || []).map(async e =>
     Object.assign({}, e, { url: await proxyUrl(env, e.url, origin) })));
+  warm(env, ctx, (list || []).map(e => e && e.url));
+  return out;
 }
 
 async function serveImage(env, url, sig, payload) {
@@ -400,8 +443,15 @@ function fmtEmojis(list, head, fmt, tpl) {
     `\n${f.line(e, i)}`).join('\n\n');
 }
 
-const PREVIEW_PACKS = 6;   // 给几个包配预览图
-const PREVIEW_EACH  = 4;   // 每个包配几张
+/* 一次返回多少张图，是这个接口最要命的一个数。
+   不是因为我们慢 —— 一条数据库查询就取回来了 —— 而是因为前端拿到结果后
+   会把每张图都预取一遍（它的报错原文就叫 prefetch loop）。
+   每张都要经我们中转去第三方图床取，六十张一起来，它等不及就把整个
+   工具调用掐了，用户看到的是"Fetch is aborted"，像是我们挂了。
+   一张能过、六十张过不了 —— 所以这些默认值宁可小。
+   模型真需要更多，它自己会带 limit 再调一次。 */
+const PREVIEW_PACKS = 4;   // 给几个包配预览图
+const PREVIEW_EACH  = 2;   // 每个包配几张
 
 function fmtPacks(list, fmt, tpl) {
   if (!list.length) return '没找到符合的表情包。';
@@ -423,7 +473,7 @@ function fmtPacks(list, fmt, tpl) {
     }).join('\n\n');
 }
 
-async function runTool(env, token, name, args, origin, fmt, tpl) {
+async function runTool(env, token, name, args, origin, fmt, tpl, ctx) {
   // 写法的优先级：模型临时指定 > 地址上的参数 > 令牌上存的 > 默认
   if (!fmt && !tpl) {
     const cfg = await tokenCfg(env, token);
@@ -449,7 +499,7 @@ async function runTool(env, token, name, args, origin, fmt, tpl) {
       p_token: token,
       p_query: String(a.query == null ? '' : a.query).trim(),
       p_category: String(a.category == null ? '' : a.category).trim(),
-      p_limit: num(a.limit, 20),
+      p_limit: Math.min(Math.max(num(a.limit, 8), 1), 20),
     });
     if (!r.ok) return { text: authText(r), err: true };
     const list = r.avatars || [];
@@ -460,12 +510,12 @@ async function runTool(env, token, name, args, origin, fmt, tpl) {
     // 不标的话模型只会甩两张图，用户不知道该拿哪张
     const out = [];
     for (const p of list) {
-      const one = await withProxy(env, [{ desc: p.title, url: p.url }], origin);
+      const one = await withProxy(env, [{ desc: p.title, url: p.url }], origin, ctx);
       const head = `${out.length + 1}. ${oneLine(p.title) || '（没写标题）'}　${p.category || '未分类'}` +
                    (p.author ? `　by ${p.author}` : '') +
                    (Array.isArray(p.tags) && p.tags.length ? `　标签：${p.tags.join(' ')}` : '');
       if (p.is_pair && p.url2) {
-        const two = await withProxy(env, [{ desc: p.title + ' 左', url: p.url }, { desc: p.title + ' 右', url: p.url2 }], origin);
+        const two = await withProxy(env, [{ desc: p.title + ' 左', url: p.url }, { desc: p.title + ' 右', url: p.url2 }], origin, ctx);
         out.push(head + '　【情侣头像，一对两张，要一起发并说清哪张给谁】\n' +
                  two.map((e, i) => f.line(e, i)).join('\n'));
       } else {
@@ -479,7 +529,7 @@ async function runTool(env, token, name, args, origin, fmt, tpl) {
   }
 
   if (name === 'load_emoji_set') {
-    const want = Math.min(Math.max(num(a.limit, 60), 5), 100);
+    const want = Math.min(Math.max(num(a.limit, 20), 5), 40);
     const q = String(a.query == null ? '' : a.query).trim();
     let list = [];
 
@@ -500,7 +550,7 @@ async function runTool(env, token, name, args, origin, fmt, tpl) {
 
     if (!list.length) return { text: q ? `没找到「${q}」相关的表情，换个词再试。` : '站里还没有表情。', err: true };
 
-    const withUrls = await withProxy(env, list, origin);
+    const withUrls = await withProxy(env, list, origin, ctx);
     const f = fmtOf(fmt, tpl);
     const text =
       `已载入 ${withUrls.length} 张表情${q ? `（主题：${q}）` : ''}。\n\n` +
@@ -515,9 +565,9 @@ async function runTool(env, token, name, args, origin, fmt, tpl) {
   if (name === 'search_emojis') {
     const q = String(a.query == null ? '' : a.query).trim();
     if (!q) return { text: '要搜什么词？', err: true };
-    const r = await rpc(env, 'mcp_search_emojis', { p_token: token, p_query: q, p_limit: num(a.limit, 40) });
+    const r = await rpc(env, 'mcp_search_emojis', { p_token: token, p_query: q, p_limit: Math.min(Math.max(num(a.limit, 8), 1), 20) });
     if (!r.ok) return { text: authText(r), err: true };
-    const list = await withProxy(env, r.emojis, origin);
+    const list = await withProxy(env, r.emojis, origin, ctx);
     return { text: fmtEmojis(list, `搜「${q}」找到 ${list.length} 张：`, fmt, tpl), data: { ok: true, emojis: list } };
   }
 
@@ -526,7 +576,7 @@ async function runTool(env, token, name, args, origin, fmt, tpl) {
       p_token: token,
       p_query: String(a.query == null ? '' : a.query).trim(),
       p_category: String(a.category == null ? '' : a.category).trim(),
-      p_limit: num(a.limit, 20), p_offset: num(a.offset, 0),
+      p_limit: Math.min(Math.max(num(a.limit, 10), 1), 30), p_offset: num(a.offset, 0),
     });
     if (!r.ok) return { text: authText(r), err: true };
     const packs = r.packs || [];
@@ -546,7 +596,7 @@ async function runTool(env, token, name, args, origin, fmt, tpl) {
       if (pv && pv.ok && pv.previews) {
         await Promise.all(head.map(async p => {
           const imgs = pv.previews[p.id];
-          if (Array.isArray(imgs) && imgs.length) p.preview = await withProxy(env, imgs, origin);
+          if (Array.isArray(imgs) && imgs.length) p.preview = await withProxy(env, imgs, origin, ctx);
         }));
       }
     }
@@ -562,9 +612,18 @@ async function runTool(env, token, name, args, origin, fmt, tpl) {
     const r = await rpc(env, 'mcp_get_pack', { p_token: token, p_id: id });
     if (!r.ok) return { text: r.error === 'not_found' ? '这个表情包找不到了，可能已经被作者删掉。' : authText(r), err: true };
     const p = r.pack || {};
-    const head = `《${p.title}》 by ${p.author || '佚名'}  共 ${r.emoji_count} 张\n` +
+    // 整包一股脑给出去，一百多张的包能把前端的逐张预取拖到超时 ——
+    // 那是"一张都收不到"，比"只收到前 24 张"糟得多
+    const cap = Math.min(Math.max(num(a.limit, 24), 1), 60);
+    const all = r.emojis || [];
+    const shown = all.slice(0, cap);
+    const more = all.length > shown.length
+      ? `　这次先给前 ${shown.length} 张，还有 ${all.length - shown.length} 张。` +
+        `用户说「全都要」的话，再调一次这个工具把 limit 调大。`
+      : '';
+    const head = `《${p.title}》 by ${p.author || '佚名'}  共 ${r.emoji_count} 张${more}\n` +
                  `转载/二改条款（只在用户问起时才提，不影响你现在发图）：${permLine(p)}\n${p.link}\n`;
-    const list = await withProxy(env, r.emojis, origin);
+    const list = await withProxy(env, shown, origin, ctx);
     return { text: fmtEmojis(list, head, fmt, tpl), data: Object.assign({}, r, { emojis: list }) };
   }
 
@@ -587,7 +646,7 @@ function authText(r) {
 const rpcOk  = (id, result) => ({ jsonrpc: '2.0', id, result });
 const rpcErr = (id, code, message) => ({ jsonrpc: '2.0', id, error: { code, message } });
 
-async function handleMessage(env, token, msg, origin, fmt, tpl) {
+async function handleMessage(env, token, msg, origin, fmt, tpl, ctx) {
   if (!msg || msg.jsonrpc !== '2.0' || typeof msg.method !== 'string') {
     return rpcErr(msg && msg.id != null ? msg.id : null, -32600, 'Invalid Request');
   }
@@ -671,7 +730,7 @@ async function handleMessage(env, token, msg, origin, fmt, tpl) {
           });
         }
       }
-      const out = await runTool(env, token, p.name, p.arguments, origin, fmt, tpl);
+      const out = await runTool(env, token, p.name, p.arguments, origin, fmt, tpl, ctx);
       const res = { content: [{ type: 'text', text: out.text }] };
       if (out.err) res.isError = true;
       if (out.data) res.structuredContent = out.data;
@@ -903,7 +962,7 @@ async function readBody(req) {
    回 { created, data: [ { url, b64_json, revised_prompt } ] }
    url 和 b64_json 两个都给 —— 各家前端读哪个的都有，给全了省得挨个试。
    前端明确说 response_format: "url" 时就不去取字节了，能省一个来回。 */
-async function genOpenAI(env, token, req, url, cors) {
+async function genOpenAI(env, token, req, url, cors, ctx) {
   const body = await readBody(req);
   const prompt = genPrompt(body, url);
   const n = Math.min(Math.max(parseInt(body.n, 10) || 1, 1), 4);
@@ -918,6 +977,7 @@ async function genOpenAI(env, token, req, url, cors) {
   const data = [];
   for (const p of picks) {
     const link = await proxyUrl(env, p.url, url.origin);
+    warm(env, ctx, [p.url]);
     const item = { url: link, revised_prompt: oneLine(p.desc) || prompt };
     if (wantB64) {
       const bytes = await genBytes(p.url);
@@ -1014,7 +1074,7 @@ const json = (body, status = 200, extra = {}, cors = CORS) =>
   });
 
 export default {
-  async fetch(req, env) {
+  async fetch(req, env, ctx) {
     const url = new URL(req.url);
     const origin = url.origin;
     const cors = corsFor(req);
@@ -1052,7 +1112,7 @@ export default {
       if (!genToken) {
         return json({ error: { message: '没带令牌。在这个绘图服务的「API Key / 密钥」那一栏填上 yoww_ 开头的令牌。', type: 'invalid_request_error' } }, 401, {}, cors);
       }
-      if (isGen) return genOpenAI(env, genToken, req, url, cors);
+      if (isGen) return genOpenAI(env, genToken, req, url, cors, ctx);
       if (isTxt) return genSD(env, genToken, req, url, cors);
       if (first === 'gen') return genDirect(env, genToken, req, url, seg, cors);
       return json({ error: { message: '这个地址没有。生图用 ' + url.origin + '/v1/images/generations 或 ' + url.origin + '/sdapi/v1/txt2img', type: 'invalid_request_error' } }, 404, {}, cors);
@@ -1119,13 +1179,13 @@ export default {
     if (Array.isArray(body)) {
       const out = [];
       for (const m of body) {
-        const r = await handleMessage(env, token, m, origin, fmt, tpl);
+        const r = await handleMessage(env, token, m, origin, fmt, tpl, ctx);
         if (r) out.push(r);
       }
       return out.length ? json(out, 200, extra, cors) : new Response(null, { status: 202, headers: cors });
     }
 
-    const r = await handleMessage(env, token, body, origin, fmt, tpl);
+    const r = await handleMessage(env, token, body, origin, fmt, tpl, ctx);
     // 通知和响应没有 id，规范说回 202 空body
     if (!r) return new Response(null, { status: 202, headers: cors });
     return json(r, 200, extra, cors);
