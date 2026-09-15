@@ -661,12 +661,12 @@ async function handleMessage(env, token, msg, origin, fmt, tpl, ctx) {
       // 比等用户问了一句话之后才报错要好得多。
       let note = '';
       if (!token) {
-        note = '\n\n⚠️ 没有检测到令牌。请在这个 MCP 服务的地址后面加上你的令牌，' +
+        note = '\n\n注意：没有检测到令牌。请在这个 MCP 服务的地址后面加上你的令牌，' +
                '或者配一个 Authorization: Bearer <令牌> 的请求头。令牌在 ' + SITE + ' 的「我的 → MCP 接口」里生成。';
       } else {
         const who = await tokenCfg(env, token);
         if (!who || !who.ok) {
-          note = '\n\n⚠️ 令牌无效、已撤销或已过期，现在什么都搜不到。到 ' + SITE + ' 的「我的 → MCP 接口」重新生成一个。';
+          note = '\n\n注意：令牌无效、已撤销或已过期，现在什么都搜不到。到 ' + SITE + ' 的「我的 → MCP 接口」重新生成一个。';
         } else {
           const zh = { emoji: '表情包', avatar: '头像' };
           const on = (who.scopes || []).map(x => zh[x] || x).join('、');
@@ -1235,8 +1235,10 @@ function userScript(origin) {
     '*,*::before,*::after{box-sizing:border-box}' +
     '.wrap{position:fixed;right:18px;bottom:18px;z-index:2147483000;' +
       'font:13px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;color:#1b1b1f}' +
-    '.fab{width:42px;height:42px;border-radius:50%;border:none;cursor:pointer;font-size:20px;' +
-      'background:#3b6ef5;color:#fff;box-shadow:0 3px 12px rgba(0,0,0,.28);display:block}' +
+    '.fab{width:42px;height:42px;border-radius:50%;border:none;cursor:pointer;' +
+      'background:#3b6ef5;color:#fff;box-shadow:0 3px 12px rgba(0,0,0,.28);' +
+      'display:flex;align-items:center;justify-content:center;padding:0}' +
+    '.fab svg{width:21px;height:21px;display:block}' +
     '.box{position:absolute;right:0;bottom:52px;width:340px;max-width:calc(100vw - 36px);' +
       'max-height:min(520px,calc(100vh - 110px));overflow:auto;background:#fbfaf8;' +
       'border:1px solid #e6e1d9;border-radius:14px;box-shadow:0 8px 28px rgba(0,0,0,.2);padding:12px}' +
@@ -1268,6 +1270,7 @@ function userScript(origin) {
     var n = document.createElement(tag);
     if (attrs) Object.keys(attrs).forEach(function (k) {
       if (k === 'text') n.textContent = attrs[k];
+      else if (k === 'html') n.innerHTML = attrs[k];
       else if (k.slice(0, 2) === 'on') n.addEventListener(k.slice(2), attrs[k]);
       else n.setAttribute(k, attrs[k]);
     });
@@ -1282,7 +1285,12 @@ function userScript(origin) {
     root = host.attachShadow({ mode: 'open' });
     root.appendChild(el('style', { text: css() }));
     root.appendChild(el('div', { class: 'wrap' }, [
-      el('button', { class: 'fab', title: 'Yoww 表情包', onclick: toggle, text: '🐱' }),
+      el('button', { class: 'fab', title: 'Yoww 表情包', onclick: toggle,
+        html: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" ' +
+              'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+              '<rect x="3" y="3" width="18" height="18" rx="4"/>' +
+              '<circle cx="8.8" cy="9.2" r="1.5"/>' +
+              '<path d="M21 15.5 16.2 10.7 7 19.9"/></svg>' }),
     ]));
     document.documentElement.appendChild(host);
   }
@@ -1744,7 +1752,7 @@ const $=id=>document.getElementById(id), out=$('out');
 function step(name){ const d=document.createElement('div'); d.className='step';
   d.innerHTML='<b>'+name+'</b> <span class="r">检查中…</span>'; out.appendChild(d); return d; }
 function mark(d,ok,msg,extra){ d.querySelector('.r').innerHTML=
-  '<span class="'+(ok?'ok':'bad')+'">'+(ok?'✅ ':'❌ ')+msg+'</span>';
+  '<span class="'+(ok?'ok':'bad')+'">'+(ok?'通过 · ':'没通过 · ')+msg+'</span>';
   if(extra){ const p=document.createElement('pre'); p.textContent=extra; d.appendChild(p); } }
 async function call(tok,body){
   const r=await fetch('/mcp',{method:'POST',headers:{'content-type':'application/json',
@@ -1765,8 +1773,8 @@ $('go').addEventListener('click', async ()=>{
     const init=await call(tok,{jsonrpc:'2.0',id:1,method:'initialize',params:{protocolVersion:'2025-06-18',capabilities:{},clientInfo:{name:'selftest',version:'1'}}});
     const ins=init.json&&init.json.result&&init.json.result.instructions||'';
     const tokOk=ins.includes('当前令牌属于');
-    // 失败时只把那句 ⚠️ 拎出来，别把整段给模型看的说明倒给用户
-    const warn=ins.slice(ins.indexOf('⚠️'));
+    // 失败时只把那句「注意：」拎出来，别把整段给模型看的说明倒给用户
+    const warn=ins.slice(ins.indexOf('注意：'));
     mark(d,tokOk,tokOk?ins.slice(ins.lastIndexOf('当前令牌属于')):'令牌没通过',
          tokOk?'':(warn||('HTTP '+init.status+' '+init.raw.slice(0,200))));
     if(!tokOk) return;
@@ -1868,7 +1876,7 @@ function scriptPage() {
 <ol>
 <li>浏览器先装 <b>Tampermonkey</b>（油猴）扩展，商店里搜得到。</li>
 <li>点下面这个按钮，油猴会弹出安装框，点「安装」。</li>
-<li>随便打开一个 AI 聊天网页，右下角会出现一个 🐱。点开，把令牌粘进去。</li>
+<li>随便打开一个 AI 聊天网页，右下角会出现一个圆形按钮。点开，把令牌粘进去。</li>
 </ol>
 <a class="go" href="/yoww.user.js">安装脚本</a>
 <p class="note">令牌在 <a href="${SITE}">yoww2026.cn</a> 的「我的 → MCP 接口」里生成，跟接 MCP 用的是同一个，不用另外办。</p>
@@ -1890,7 +1898,7 @@ function scriptPage() {
 
 <h2>装不上 / 不出现按钮</h2>
 <ul>
-<li>右下角没有 🐱：油猴里看看这个脚本是不是被停用了，或者当前网站被排除了。</li>
+<li>右下角没有按钮：油猴里看看这个脚本是不是被停用了，或者当前网站被排除了。</li>
 <li>点了图但框里没反应：先在聊天框里点一下（让它获得过焦点），再点图。脚本插的是你<b>最后点过</b>的那个框。</li>
 <li>图是裂的：说明图片中转没通，打开 <a href="/selftest">/selftest</a> 跑一遍，第 5 步会直接告诉你。</li>
 </ul>
