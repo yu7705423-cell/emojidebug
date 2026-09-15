@@ -484,6 +484,15 @@
   .tab-btn span{font-size:10px; font-weight:600;}
   .tab-btn.active{color:var(--text);}
 
+  /* 分类页第一层那四张大卡片 */
+  .zone-grid{display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:4px;}
+  .zone-card{display:block; width:100%; text-align:left; padding:0; border:1px solid var(--border-soft);
+             border-radius:var(--radius-m); background:var(--bg-elev); cursor:pointer; overflow:hidden;}
+  .zone-card .zone-cover{width:100%; padding-top:62%; position:relative; overflow:hidden; background:var(--border-soft);}
+  .zone-card .zone-cover .coll-cover{position:absolute; inset:0; padding-top:0; border:none;}
+  .zone-card .zone-meta{padding:10px 12px 12px;}
+  .zone-card .zone-name{font-size:15px; font-weight:700; color:var(--text);}
+  .zone-card .zone-sub{font-size:12px; color:var(--text-dim); margin-top:2px;}
   .cat-sticky{position:sticky; top:0; z-index:5; background:var(--bg); margin:0 -18px; padding:10px 18px 8px; border-bottom:1px solid var(--border-soft);}
 
   .type-toggle{display:flex; border:1px solid var(--border); border-radius:999px; padding:3px; gap:3px;}
@@ -661,12 +670,12 @@
         </div>
         <button class="avatar-btn" id="homeAvatarBtn" aria-label="更换头像"><span class="ph" id="homeAvatarPh">+</span><img id="homeAvatarImg" style="display:none;"></button>
       </div>
+      <!-- 第一页分两屏：首页和许愿。许愿原来是底部第五个 tab，
+           底部只留四个之后就挪到这儿来了 -->
       <div class="toggle-search-row">
-        <div class="type-toggle" id="homeTypeToggle">
-          <button class="active" data-type="collections">表情包</button>
-          <button data-type="fonts">字体</button>
-          <button data-type="posts">其他</button>
-          <button data-type="wanted">待描述</button>
+        <div class="type-toggle" id="homeSceneToggle">
+          <button class="active" data-scene="main">首页</button>
+          <button data-scene="wish">许愿</button>
         </div>
         <button class="icon-btn" id="homeRefreshBtn" aria-label="刷新"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v6h-6"/></svg></button>
         <button class="icon-btn" id="notifBtn" aria-label="通知" style="position:relative;">
@@ -674,40 +683,65 @@
           <span id="notifBadge" style="display:none; position:absolute; top:5px; right:5px; min-width:14px; height:14px; padding:0 3px; border-radius:999px; background:#E0453C; color:#fff; font-size:9px; font-weight:700; line-height:14px; text-align:center;"></span>
         </button>
         <button class="icon-btn" id="homeSearchBtn" aria-label="搜索"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg></button>
+        <button class="icon-btn" id="wishNewBtn" aria-label="发起许愿" style="display:none;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg></button>
       </div>
-      <div id="homeSearchWrap" style="display:none; margin-top:10px;">
-        <input class="field-input" id="homeSearch" placeholder="搜索作品、作者，或粘贴一条分享链接">
-      </div>
-      <div class="chip-row" id="homeSortRow" style="margin-top:10px;">
-        <button class="chip active" data-sort="new">最新</button>
-        <button class="chip" data-sort="hot">热门</button>
-      </div>
-      <div class="section-title" id="homeSectionTitle">作品</div>
-      <div id="homeGrid"></div>
-    </div>
 
-    <!-- CATEGORY -->
-    <div class="page" id="page-category">
-      <div class="toggle-search-row" style="margin-top:2px;">
-        <div class="type-toggle" id="catTypeToggle">
+      <div id="homePaneMain">
+        <div class="type-toggle" id="homeTypeToggle" style="margin-top:10px;">
           <button class="active" data-type="collections">表情包</button>
           <button data-type="fonts">字体</button>
           <button data-type="posts">其他</button>
           <button data-type="wanted">待描述</button>
         </div>
-        <button class="icon-btn" id="catSearchBtn" aria-label="搜索"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg></button>
+        <div id="homeSearchWrap" style="display:none; margin-top:10px;">
+          <input class="field-input" id="homeSearch" placeholder="搜索作品、作者，或粘贴一条分享链接">
+        </div>
+        <div class="chip-row" id="homeSortRow" style="margin-top:10px;">
+          <button class="chip active" data-sort="new">最新</button>
+          <button class="chip" data-sort="hot">热门</button>
+        </div>
+        <div class="section-title" id="homeSectionTitle">作品</div>
+        <div id="homeGrid"></div>
       </div>
-      <div id="catSearchWrap" style="display:none; margin-top:10px;">
-        <input class="field-input" id="catSearch" placeholder="搜索作品 / 描述 / 作者昵称">
+
+      <div id="homePaneWish" style="display:none;">
+        <p class="hint" style="margin-top:12px;">想要什么没找到、有什么问题想问，都发在这里。别人可以直接带着作品来回你。</p>
+        <div class="chip-row" id="wishSortRow">
+          <button class="chip active" data-wsort="new">最新</button>
+          <button class="chip" data-wsort="want">最多人想要</button>
+          <button class="chip" data-wsort="open">求助中</button>
+          <button class="chip" data-wsort="mine">我发的</button>
+        </div>
+        <div id="wishList" style="margin-top:14px;"></div>
       </div>
-      <div class="cat-sticky">
-        <div class="section-title" style="margin-top:0;">分类</div>
-        <div class="chip-row" id="catChipRow"></div>
-        <!-- 头像的五个小分类。只在「其他 → 头像」下面出现 -->
-        <div class="chip-row" id="catSubChipRow" style="display:none;"></div>
+    </div>
+
+    <!-- CATEGORY：两层。第一层是四张大类卡片，点进去才是那一类的专区。
+         原来是顶上一排切换 + 一排分类 + 作品，三样东西同时摆在眼前，
+         进来第一眼不知道该先看哪儿 -->
+    <div class="page" id="page-category">
+      <div id="catZoneCards">
+        <div class="section-title" style="margin-top:2px;">分类</div>
+        <div class="zone-grid" id="catZoneGrid"></div>
       </div>
-      <div class="section-title">作品</div>
-      <div id="catGrid"></div>
+
+      <div id="catZoneView" style="display:none;">
+        <div class="toggle-search-row" style="margin-top:2px;">
+          <button class="icon-btn" id="catBackBtn" aria-label="返回"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg></button>
+          <div class="section-title" id="catZoneTitle" style="margin:0; flex:1;"></div>
+          <button class="icon-btn" id="catSearchBtn" aria-label="搜索"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg></button>
+        </div>
+        <div id="catSearchWrap" style="display:none; margin-top:10px;">
+          <input class="field-input" id="catSearch" placeholder="搜索作品 / 描述 / 作者昵称">
+        </div>
+        <div class="cat-sticky">
+          <div class="chip-row" id="catChipRow"></div>
+          <!-- 头像的小分类。只在「其他 → 头像」下面出现 -->
+          <div class="chip-row" id="catSubChipRow" style="display:none;"></div>
+        </div>
+        <div class="section-title">作品</div>
+        <div id="catGrid"></div>
+      </div>
     </div>
 
     <!-- PUBLISH -->
@@ -789,28 +823,6 @@
     </div>
 
     <!-- FAVORITES -->
-    <div class="page" id="page-favorites">
-      <div class="section-title" style="margin-top:0;">收藏</div>
-      <div id="favGrid"></div>
-    </div>
-
-    <!-- WISH BOARD 许愿 -->
-    <div class="page" id="page-wish">
-      <div class="toggle-search-row" style="margin-top:2px;">
-        <div class="section-title" style="margin:0; flex:1;">许愿</div>
-        <button class="icon-btn" id="wishRefreshBtn" aria-label="刷新"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v6h-6"/></svg></button>
-        <button class="icon-btn" id="wishNewBtn" aria-label="发起许愿"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg></button>
-      </div>
-      <p class="hint" style="margin-top:8px;">想要什么没找到、有什么问题想问，都发在这里。别人可以直接带着作品来回你。</p>
-      <div class="chip-row" id="wishSortRow">
-        <button class="chip active" data-wsort="new">最新</button>
-        <button class="chip" data-wsort="want">最多人想要</button>
-        <button class="chip" data-wsort="open">求助中</button>
-        <button class="chip" data-wsort="mine">我发的</button>
-      </div>
-      <div id="wishList" style="margin-top:14px;"></div>
-    </div>
-
     <!-- MY (Instagram-style profile) -->
     <div class="page" id="page-my">
       <div class="ig-head">
@@ -872,14 +884,6 @@
     <button class="tab-btn" data-page="publish">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="1"/><path d="M12 8v8M8 12h8"/></svg>
       <span>发布</span>
-    </button>
-    <button class="tab-btn" data-page="favorites">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
-      <span>收藏</span>
-    </button>
-    <button class="tab-btn" data-page="wish">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.4 5.4 5.6.6-4.2 4 1.2 5.8L12 16l-5 2.8L8.2 13 4 9l5.6-.6z"/></svg>
-      <span>许愿</span>
     </button>
     <button class="tab-btn" data-page="my">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>
@@ -1735,7 +1739,10 @@ $('homeRefreshBtn').addEventListener('click', async ()=>{
   const btn = $('homeRefreshBtn');
   btn.classList.add('spinning');
   try{
-    await silentRefresh(true);
+    // 首页和许愿共用这一个刷新键，刷哪一份看你现在在哪一屏。
+    // 原来许愿自己有一个，两屏合并之后再摆两个刷新键只会让人犹豫该点哪个
+    if(homeScene === 'wish') await ensureWishes(true);
+    else await silentRefresh(true);
     showToast('已刷新');
   }finally{
     btn.classList.remove('spinning');
@@ -2523,7 +2530,39 @@ function buildFontShareCardNode(f){
 }
 
 /* ===================== tabs / nav ===================== */
-document.querySelectorAll('.tab-btn').forEach(btn=>btn.addEventListener('click',()=>showPage(btn.dataset.page)));
+document.querySelectorAll('.tab-btn').forEach(btn=>btn.addEventListener('click',()=>{
+  // 已经在分类页还再点一下分类，就退回到那四张卡片 ——
+  // 手机上大家本来就习惯"再点一下当前这个 tab 等于回到顶层"
+  if(btn.dataset.page === 'category' && currentPageId === 'category' && catZone) closeCatZone();
+  showPage(btn.dataset.page);
+}));
+
+/* 第一页分两屏。许愿原来是底部第五个 tab，底部砍到四个之后挪到这里。
+   刷新键两屏共用一个，发起许愿那个只在许愿屏出现 —— 摆在首页屏没有意义。 */
+let homeScene = 'main';
+function setHomeScene(scene){
+  homeScene = scene;
+  document.querySelectorAll('#homeSceneToggle button').forEach(b=>
+    b.classList.toggle('active', b.dataset.scene === scene));
+  const wish = scene === 'wish';
+  $('homePaneMain').style.display = wish ? 'none' : '';
+  $('homePaneWish').style.display = wish ? '' : 'none';
+  $('homeSearchBtn').style.display = wish ? 'none' : '';
+  $('wishNewBtn').style.display = wish ? '' : 'none';
+  if(wish){
+    // 先把手上已经有的画出来。ensureWishes 在"已经加载过"时会直接返回、
+    // 一行都不画 —— 从通知点进某条许愿也会把数据拉回来并标记成已加载，
+    // 那之后再切到这一屏就会是一片空白
+    renderWishList();
+    // 许愿板只在真的翻过去时才去拉数据。开屏就拉的话，多数人一次都不会点开，
+    // 却每个人每次都要付这份流量
+    ensureWishes();
+  }else{
+    $('homeSearchWrap').style.display = 'none';
+  }
+}
+document.querySelectorAll('#homeSceneToggle button').forEach(b=>
+  b.addEventListener('click', ()=>setHomeScene(b.dataset.scene)));
 function showPage(id){
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   $('page-'+id).classList.add('active');
@@ -2531,9 +2570,6 @@ function showPage(id){
   document.querySelector('.page-scroll').scrollTop = 0;
   currentPageId = id;
   renderAll();
-  // 许愿板只在真的翻过去时才拉数据。放进开屏里的话，多数人一次都不会点开，
-  // 却每个人每次都要付这份流量
-  if(id === 'wish') ensureWishes();
 }
 // 往搜索框里粘一个作品链接就直接打开它。
 // 这条不经过剪贴板权限 —— iOS 不给持久授权，每次都要点系统的粘贴按钮，
@@ -3237,15 +3273,74 @@ document.querySelectorAll('#homeSortRow .chip').forEach(c=>{
 let activeCategory = null;
 let activeAvatarCat = null;   // 头像下面的五个小分类
 let catMode = 'collections';
-document.querySelectorAll('#catTypeToggle button').forEach(b=>{
-  b.addEventListener('click', ()=>{
-    document.querySelectorAll('#catTypeToggle button').forEach(x=>x.classList.remove('active'));
-    b.classList.add('active');
-    catMode = b.dataset.type;
-    activeCategory = null; activeAvatarCat = null;
-    renderCategoryChips(); renderCategory();
+// null = 还在第一层（四张大卡片）；有值 = 已经进了某一类的专区
+let catZone = null;
+
+const ZONES = [
+  { type:'collections', label:'表情包', sub:'一整包一整包的表情' },
+  { type:'fonts',       label:'字体',   sub:'可以下载安装的字体' },
+  { type:'posts',       label:'其他',   sub:'头像、铃声、头像框、教程、指路' },
+  { type:'wanted',      label:'待描述', sub:'缺描述词的表情包，等人来写' },
+];
+
+// 每张卡片配几张图当封面，看一眼就知道这一类里大概是些什么东西。
+// 字体没有图，那就留白 —— 硬塞一个灰块占位比留白还难看
+function zonePeek(type){
+  if(type === 'fonts') return { n: fonts.length, imgs: [] };
+  if(type === 'posts'){
+    return { n: posts.length,
+             imgs: posts.filter(pt=>(pt.url||'').trim() && (pt.kind==='avatar'||pt.kind==='avatar_frame'))
+                        .slice(0,4).map(pt=>({url:pt.url})) };
+  }
+  const want = type === 'wanted';
+  const list = collections.filter(c=>!!c.needsDesc === want);
+  const imgs = [];
+  for(const c of list){
+    for(const e of asArray(c.cover)){ if(imgs.length < 4) imgs.push(e); }
+    if(imgs.length >= 4) break;
+  }
+  return { n: list.length, imgs };
+}
+
+function renderZoneCards(){
+  const wrap = $('catZoneGrid'); if(!wrap) return;
+  wrap.innerHTML = ZONES.map(z=>{
+    const { n, imgs } = zonePeek(z.type);
+    return `<button class="zone-card" data-zone="${z.type}">
+      <div class="zone-cover">${imgs.length ? coverHtml(imgs, true) : '<div class="coll-cover single"><div class="coll-cover-inner"></div></div>'}</div>
+      <div class="zone-meta">
+        <div class="zone-name">${esc(z.label)}</div>
+        <div class="zone-sub">${n} 件 · ${esc(z.sub)}</div>
+      </div>
+    </button>`;
+  }).join('');
+  wrap.querySelectorAll('[data-zone]').forEach(b=>{
+    b.addEventListener('click', ()=>openCatZone(b.dataset.zone));
   });
-});
+}
+
+function openCatZone(type){
+  catZone = type; catMode = type;
+  activeCategory = null; activeAvatarCat = null;
+  const z = ZONES.find(x=>x.type===type);
+  $('catZoneTitle').textContent = z ? z.label : '专区';
+  $('catZoneCards').style.display = 'none';
+  $('catZoneView').style.display = '';
+  $('catSearch').value = '';
+  $('catSearchWrap').style.display = 'none';
+  renderCategoryChips(); renderCategory();
+  const sc = document.querySelector('.page-scroll'); if(sc) sc.scrollTop = 0;
+}
+
+function closeCatZone(){
+  catZone = null;
+  $('catZoneView').style.display = 'none';
+  $('catZoneCards').style.display = '';
+  renderZoneCards();
+  const sc = document.querySelector('.page-scroll'); if(sc) sc.scrollTop = 0;
+}
+
+$('catBackBtn').addEventListener('click', closeCatZone);
 $('catSearch').addEventListener('input', renderCategory);
 function renderCategoryChips(){
   const wrap = $('catChipRow'); wrap.innerHTML='';
@@ -3304,16 +3399,6 @@ function renderCategory(){
   renderItemsGrid($('catGrid'), items,
     activeAvatarCat ? `「${activeAvatarCat}」下暂时还没有头像`
     : activeCategory ? `「${activeCategory}」分类下暂时还没有内容` : '还没有内容');
-}
-
-/* ===================== favorites ===================== */
-function renderFavorites(){
-  const items = [
-    ...collections.filter(c=>favorited.has(c.id)).map(c=>({type:'collection', data:c})),
-    ...fonts.filter(f=>favorited.has(f.id)).map(f=>({type:'font', data:f})),
-    ...posts.filter(pt=>favorited.has(pt.id)).map(pt=>({type:'post', data:pt})),
-  ];
-  renderItemsGrid($('favGrid'), items, '还没有收藏任何内容', {label:'去首页看看', onClick:()=>showPage('home')});
 }
 
 
@@ -8894,7 +8979,6 @@ document.querySelectorAll('#wishSortRow .chip').forEach(btn=>{
     renderWishList();
   });
 });
-$('wishRefreshBtn').addEventListener('click', async ()=>{ await ensureWishes(true); showToast('已刷新'); });
 $('wishNewBtn').addEventListener('click', openWishComposer);
 
 /* ---- 发起许愿 ---- */
@@ -9206,8 +9290,9 @@ async function openWishFromNotification(id){
 function renderAll(){
   rebuildUserStats();
   renderHome();
-  renderCategoryChips(); renderCategory();
-  renderFavorites();
+  // 没进专区的时候只要画四张卡片，一整页作品列表白算
+  renderZoneCards();
+  if(catZone){ renderCategoryChips(); renderCategory(); }
   renderMy();
 }
 renderPubItems();
