@@ -502,6 +502,18 @@
      分给切换条只剩 150px，四个三字标签会各自折成三行。窄屏收一下字号让它回到一行。 */
   @media (max-width:340px){ .type-toggle button{font-size:11px; padding:8px 0;} }
   .toggle-search-row{display:flex; align-items:center; gap:10px; margin-top:14px;}
+  /* 排序从一排胶囊改成小标题那一行右边的文字。首页顶上原来三排控件叠着，
+     这是省掉的第三排 —— 排序本来就是"看这一列"的附属选项，不该跟内容切换
+     长得一样重 */
+  .sect-row{display:flex; align-items:center; justify-content:space-between; margin:20px 0 10px;}
+  .sect-row .section-title{margin:0;}
+  .sort-text{display:flex; gap:14px; flex-shrink:0;}
+  .sort-text button{border:none; background:none; padding:2px 0; font-size:12px; font-weight:600;
+                    color:var(--text-faint); cursor:pointer; border-bottom:1.5px solid transparent;}
+  .sort-text button.active{color:var(--text); border-bottom-color:var(--ink);}
+  /* 首页是混着排的：字体卡在字体专区里是 110px 高的圆角卡，跟表情包的正方形
+     封面摆一起会矮一截、下面空一块。首页里改成同样的正方形、同样的直角。 */
+  .coll-grid.mixed .font-card-canvas.mini{height:auto; aspect-ratio:1/1; border-radius:0;}
   .toggle-search-row .type-toggle{flex:1;}
   #homeRefreshBtn.spinning svg{animation:spin .7s linear infinite;}
 
@@ -686,21 +698,19 @@
         <button class="icon-btn" id="wishNewBtn" aria-label="发起许愿" style="display:none;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg></button>
       </div>
 
+      <!-- 首页不再按类型分了：分类有自己的 tab，还有专区，首页再放一遍是重复的。
+           这里就是全站混在一起的一条流，表情包、字体、其他、待描述都在。 -->
       <div id="homePaneMain">
-        <div class="type-toggle" id="homeTypeToggle" style="margin-top:10px;">
-          <button class="active" data-type="collections">表情包</button>
-          <button data-type="fonts">字体</button>
-          <button data-type="posts">其他</button>
-          <button data-type="wanted">待描述</button>
-        </div>
         <div id="homeSearchWrap" style="display:none; margin-top:10px;">
           <input class="field-input" id="homeSearch" placeholder="搜索作品、作者，或粘贴一条分享链接">
         </div>
-        <div class="chip-row" id="homeSortRow" style="margin-top:10px;">
-          <button class="chip active" data-sort="new">最新</button>
-          <button class="chip" data-sort="hot">热门</button>
+        <div class="sect-row">
+          <div class="section-title" id="homeSectionTitle">作品</div>
+          <div class="sort-text" id="homeSortRow">
+            <button class="active" data-sort="new">最新</button>
+            <button data-sort="hot">热门</button>
+          </div>
         </div>
-        <div class="section-title" id="homeSectionTitle">作品</div>
         <div id="homeGrid"></div>
       </div>
 
@@ -3103,7 +3113,7 @@ function emptyStateHtml(text, action){
   const btn = action ? `<button class="btn-outline empty-action">${esc(action.label)}</button>` : '';
   return `<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 16l5-5 4 4 3-3 6 6"/><circle cx="8.5" cy="8.5" r="1.2"/></svg><p>${esc(text)}</p>${btn}</div>`;
 }
-function renderItemsGrid(container, items, emptyText, action){
+function renderItemsGrid(container, items, emptyText, action, gridClass){
   if(!items.length){
     container.innerHTML = emptyStateHtml(emptyText || '这里还没有内容', action);
     // 必须在 container 里找。多个空列表同时渲染时（新用户的收藏页 + 我的页），
@@ -3112,7 +3122,7 @@ function renderItemsGrid(container, items, emptyText, action){
     if(btn && action) btn.addEventListener('click', action.onClick);
     return;
   }
-  container.innerHTML = `<div class="coll-grid">${items.map(it=> it.type==='font' ? fontBrowseCardHtml(it.data) : it.type==='post' ? postCardHtml(it.data) : collCardHtml(it.data)).join('')}</div>`;
+  container.innerHTML = `<div class="coll-grid${gridClass ? ' '+gridClass : ''}">${items.map(it=> it.type==='font' ? fontBrowseCardHtml(it.data) : it.type==='post' ? postCardHtml(it.data) : collCardHtml(it.data)).join('')}</div>`;
   container.querySelectorAll('.coll-card[data-id]').forEach(el=>{
     const id = el.dataset.id;
     let timer = null, longPressed = false;
@@ -3224,47 +3234,51 @@ function wantedDescsMatch(c, q){
   return c.emojis.some(e => (emojiDescs.get(e.id)||[]).some(r => low(r.text).includes(q)));
 }
 
-/* ===================== home ===================== */
+/* ===================== home =====================
+   首页不按类型分。分类有自己的 tab，进去还有专区，首页再放一遍纯属重复，
+   而且为了那一排切换，顶上一度叠了三排控件。现在这里只有一条流：
+   表情包、字体、其他、待描述全混在一起，按最新或最热排。
+   待描述也留在流里 —— 它要的就是被更多人看见，藏进分类里反而没人写。 */
 let homeSort = 'new';
-let homeMode = 'collections';
-document.querySelectorAll('#homeTypeToggle button').forEach(b=>{
-  b.addEventListener('click', ()=>{
-    document.querySelectorAll('#homeTypeToggle button').forEach(x=>x.classList.remove('active'));
-    b.classList.add('active');
-    homeMode = b.dataset.type;
-    $('homeSectionTitle').textContent = homeMode==='fonts' ? '字体' : homeMode==='posts' ? '其他' : homeMode==='wanted' ? '待描述' : '作品';
-    renderHome();
-  });
-});
+
 function renderHome(){
   const q = $('homeSearch').value.trim().toLowerCase();
-  let items;
-  // 搜索时也要跟着上面的「表情包 / 字体」切换走，
-  // 否则搜索状态下点切换毫无反应，很困惑
-  if(homeMode==='fonts'){
-    let list = fonts;
-    if(q) list = list.filter(f => low(f.name).includes(q) || low(f.category).includes(q) || low(f.display_text).includes(q) || low(f.author_nickname).includes(q));
-    items = list.map(f=>({type:'font', data:f, sortKey: homeSort==='hot' ? (f.like_count||0) : new Date(f.created_at).getTime()}));
-  } else {
-    // 待描述的作品不混进普通表情包列表 —— 它们描述是空的，混在一起搜也搜不到、
-    // 看着还像是发漏了。两边靠 needsDesc 各取各的。
-    let list = collections.filter(c => !!c.needsDesc === (homeMode==='wanted'));
-    scheduleDescSearch(q, renderHome);
-    if(q) list = list.filter(c => low(c.title).includes(q) || low(c.category).includes(q) || low(c.author).includes(q) || descMatch(c, q) || wantedDescsMatch(c, q) || asArray(c.tags).some(t=>low(t).includes(q)));
-    items = list.map(c=>({type:'collection', data:c, sortKey: homeSort==='hot' ? c.likeCount : c.createdAt}));
-  }
-  if(homeMode==='posts'){
-    let list = posts;
-    if(q) list = list.filter(pt => low(pt.title).includes(q) || low(pt.author_nickname).includes(q) || low(pt.body).includes(q) || low(POST_KIND_LABEL[pt.kind]).includes(q) || asArray(pt.tags).some(t=>low(t).includes(q)));
-    items = list.map(pt=>({type:'post', data:pt, sortKey: homeSort==='hot' ? (pt.like_count||0) : new Date(pt.created_at).getTime()}));
-  }
+  // 表情包的描述词搜索要另外去库里查一趟，查回来再重画
+  scheduleDescSearch(q, renderHome);
+  const hot = homeSort === 'hot';
+  const items = [];
+
+  collections.forEach(c=>{
+    if(q && !(low(c.title).includes(q) || low(c.category).includes(q) || low(c.author).includes(q)
+              || descMatch(c, q) || wantedDescsMatch(c, q)
+              || asArray(c.tags).some(t=>low(t).includes(q)))) return;
+    items.push({ type:'collection', data:c, sortKey: hot ? c.likeCount : c.createdAt });
+  });
+
+  fonts.forEach(f=>{
+    if(q && !(low(f.name).includes(q) || low(f.category).includes(q)
+              || low(f.display_text).includes(q) || low(f.author_nickname).includes(q))) return;
+    items.push({ type:'font', data:f,
+                 sortKey: hot ? (f.like_count||0) : new Date(f.created_at).getTime() });
+  });
+
+  posts.forEach(pt=>{
+    if(q && !(low(pt.title).includes(q) || low(pt.author_nickname).includes(q) || low(pt.body).includes(q)
+              || low(POST_KIND_LABEL[pt.kind]).includes(q)
+              || asArray(pt.tags).some(t=>low(t).includes(q)))) return;
+    items.push({ type:'post', data:pt,
+                 sortKey: hot ? (pt.like_count||0) : new Date(pt.created_at).getTime() });
+  });
+
+  // 三种东西的 createdAt 都是毫秒时间戳，likeCount 都是个数，混排才对得上
   items.sort((a,b)=>b.sortKey-a.sortKey);
-  renderItemsGrid($('homeGrid'), items, q ? '没有找到相关内容，换个关键词试试' : (homeMode==='fonts'?'还没有字体':homeMode==='posts'?'还没有内容':homeMode==='wanted'?'还没有待描述的表情包':'还没有作品'));
+  renderItemsGrid($('homeGrid'), items,
+    q ? '没有找到相关内容，换个关键词试试' : '还没有作品', null, 'mixed');
 }
 $('homeSearch').addEventListener('input', renderHome);
-document.querySelectorAll('#homeSortRow .chip').forEach(c=>{
+document.querySelectorAll('#homeSortRow button').forEach(c=>{
   c.addEventListener('click', ()=>{
-    document.querySelectorAll('#homeSortRow .chip').forEach(x=>x.classList.remove('active'));
+    document.querySelectorAll('#homeSortRow button').forEach(x=>x.classList.remove('active'));
     c.classList.add('active'); homeSort = c.dataset.sort; renderHome();
   });
 });
