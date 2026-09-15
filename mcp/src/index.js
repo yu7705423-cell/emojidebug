@@ -18,7 +18,7 @@ const NAME = 'yoww';
 // 每次改动都往上加一。线上到底跑的是不是最新的，
 // 打开 /health 看这个数字就知道 —— Cloudflare 后台显示的是它自己的版本号，
 // 跟提交号对不上，别拿那个判断。
-const VERSION = '19';
+const VERSION = '20';
 const SITE = 'https://yoww2026.cn';
 
 // 我们支持的协议版本，新的排前面。客户端报的版本认识就照它的来，
@@ -687,6 +687,309 @@ async function handleMessage(env, token, msg, origin, fmt, tpl) {
   }
 }
 
+/* ---------------- 假装成一个「生图接口」 ----------------
+   这一段是整个项目里最绕的一个主意，值得写清楚为什么。
+
+   问题：几乎所有 AI 前端，AI 消息里的图都不是按 Markdown 渲染出来的。
+   AI 吐一行 ![](http://…) 出去，前端当纯文本显示，用户看到一串字符。
+   这跟权限、跟格式、跟图床都没关系 —— 那条路本来就不存在。
+
+   但是同一个前端，「生图」是能出图的。因为生图走的是另一条路：
+   AI 说"我要画一张图"，**前端自己**拿着提示词去调绘图 API，
+   拿回来的图由前端自己插进消息里 —— 走的是它原生的图片管线，
+   跟头像、跟用户自己发的图同一条路。那条路一直是通的。
+
+   所以：与其求前端渲染我们的链接，不如站到绘图 API 的位置上去。
+   AI 说「发个笑死的表情」→ 前端把「笑死」当提示词发给我们 →
+   我们不画，我们去站里搜「笑死」，把现成的表情当成"画好的图"返回 →
+   前端当成自己画的渲染出来。
+
+   对 AI 来说：它只是在用它本来就会用的生图功能。
+   对用户来说：char 自己找表情、自己发出来，不用复制粘贴。
+   对前端来说：它根本不知道这张图不是画的。
+
+   我们同时装成三种常见的绘图接口，前端认哪种填哪种：
+   · POST …/v1/images/generations   OpenAI 那套，最通用
+   · POST …/sdapi/v1/txt2img        Stable Diffusion WebUI 那套
+   · GET  /gen?prompt=…             只会拼地址的前端用这个，直接回图片本身
+
+   鉴权跟 MCP 是同一把令牌，权限也是同一套（没开头像就搜不到头像）。 */
+
+// 提示词里这些词是绘图习惯带出来的，跟"要哪张表情"没关系，搜之前先扔掉
+const GEN_JUNK = new Set([
+  'masterpiece', 'best', 'quality', 'highres', 'high', 'detailed', 'ultra', 'realistic',
+  'illustration', 'anime', 'style', 'art', 'artwork', 'drawing', 'render', '4k', '8k',
+  'sticker', 'emoji', 'emoticon', 'meme', 'image', 'picture', 'photo', 'png', 'jpg',
+  'a', 'an', 'the', 'of', 'in', 'on', 'with', 'and', 'or', 'is', 'to', 'for',
+  '表情包', '表情', '一张', '一个', '图片', '图', '发个', '来个', '生成', '画', '绘制',
+  '高清', '可爱', '风格', '请', '帮我',
+]);
+
+// 「一只很生气」这种，前面的量词和程度词全是白搭的 ——
+// 描述词库里存的是「生气」，带着前缀一个字都搜不着。
+// 一层层往下剥，剥到剩个实词为止
+const GEN_MOD = /^(一只|一个|一张|一位|一条|一名|一幅|这个|那个|这种|一脸|满脸|很|超|好|特别|非常|巨|太|真|有点|有些|略|稍微|极其|十分|十足)/;
+function genBare(w) {
+  let t = String(w), n = 0;
+  // 剥的次数有上限，正则再怎么改也不会在这里空转
+  while (n++ < 4) {
+    const next = t.replace(GEN_MOD, '');
+    if (next === t) break;
+    t = next;
+  }
+  return t;
+}
+
+/* 把一句提示词拆成几个候选搜索词，最像"能搜到东西"的排前面。
+
+   为什么要拆：模型写出来的提示词通常是一整句
+   （"一只很生气的猫，表情包风格，高清"），拿整句去 ILIKE 一个字都搜不到。
+   描述词库里存的是「生气」「猫猫」这种两三个字的短词。
+
+   所以是从长到短一路退：整句 → 逗号分段 → 连续汉字串 → 去掉程度词 →
+   按「的」切开 → 最后从最长那串里切两字窗口。
+   先长后短是为了准 —— 能搜到「摸头杀」就不要退到「摸头」。 */
+function genTerms(prompt) {
+  const raw = String(prompt == null ? '' : prompt).trim();
+  if (!raw) return [];
+  const out = [];
+  const seen = new Set();
+  const push = s => {
+    const t = String(s).trim().replace(/^[\s,，、。.!！?？:：;；"'`()（）\[\]]+|[\s,，、。.!！?？:：;；"'`()（）\[\]]+$/g, '');
+    if (!t || t.length > 20 || seen.has(t)) return;
+    if (GEN_JUNK.has(t.toLowerCase())) return;
+    seen.add(t);
+    out.push(t);
+  };
+  // 一个词连同它去掉程度词之后的样子，一起当候选
+  const pushWord = w => {
+    push(w);
+    const bare = genBare(w);
+    if (bare && bare !== w) push(bare);
+  };
+
+  // SD 那套的权重写法 (xxx:1.2) / {xxx} / [xxx]，括号本身没意义，去掉留里面的词
+  const clean = raw.replace(/[(){}\[\]]/g, ' ').replace(/:\s*[\d.]+/g, ' ');
+
+  // 整句很短的时候，整句本身就是最好的搜索词
+  if (clean.trim().length <= 8) pushWord(clean.trim());
+
+  // 按标点和空格切成段，中文段优先（描述词库是中文的）
+  const parts = clean.split(/[,，、|\n\r\/]+/).map(s => s.trim()).filter(Boolean);
+  const hasCjk = s => /[\u4e00-\u9fa5]/.test(s);
+  for (const p of parts.filter(hasCjk)) pushWord(p);
+
+  // 中文段里再抠出连续的汉字串，长的排前面
+  const runs = [];
+  for (const m of clean.matchAll(/[\u4e00-\u9fa5]{2,10}/g)) runs.push(m[0]);
+  runs.sort((a, b) => b.length - a.length);
+  for (const r of runs) {
+    pushWord(r);
+    // 「生气的猫」这种带「的」的，两边分开也各试一次
+    if (r.includes('的')) r.split('的').filter(Boolean).forEach(pushWord);
+  }
+
+  // 英文段按词再切一遍，标签里偶尔有英文
+  for (const p of parts.filter(s => !hasCjk(s))) {
+    push(p);
+    if (/\s/.test(p)) p.split(/\s+/).forEach(push);
+  }
+
+  // 兜底：从最长那串汉字里切两字窗口。
+  // 「很生气的样子」→ …「生气」…，库里存的正是这种两字词。
+  // 切出来的碎片不少是废的，所以放在最后，前面能搜到就轮不到它
+  const longest = runs[0] || '';
+  for (let i = 0; i + 2 <= longest.length; i++) push(longest.slice(i, i + 2));
+
+  // 一次调用最多试这么多个词。每个词一次数据库来回，试太多前端会等到超时
+  return out.slice(0, 8);
+}
+
+/* 按提示词挑图。搜不到就一路退，最后退到"站里最新的一批" ——
+   宁可发一张不那么贴切的表情，也不要让前端收到一个错误弹窗。
+   生图失败在大多数前端里是一句红字，比发错表情难看得多。 */
+async function genFind(env, token, prompt) {
+  const cfg = await tokenCfg(env, token);
+  if (!cfg || !cfg.ok) return { ok: false, error: authText(cfg || {}) };
+  const allow = Array.isArray(cfg.scopes) ? cfg.scopes : ['emoji', 'avatar'];
+  const terms = genTerms(prompt);
+
+  // 提示词里点名要头像，就去头像库。注意这是"用户/角色想换头像"的场景，
+  // 跟发表情是两回事，搜错库子返回的东西完全用不了
+  if (/头像|情头|avatar|profile\s*pic/i.test(String(prompt || '')) && allow.includes('avatar')) {
+    for (const t of terms.concat([''])) {
+      const r = await rpc(env, 'mcp_search_avatars', {
+        p_token: token, p_query: t, p_category: '', p_limit: 20,
+      });
+      if (r.ok && (r.avatars || []).length) {
+        return { ok: true, term: t, kind: 'avatar',
+                 list: r.avatars.map(a => ({ desc: a.title || '头像', url: a.url })) };
+      }
+    }
+  }
+
+  if (!allow.includes('emoji')) {
+    return { ok: false, error: '这个令牌没开「表情包」。令牌的主人可以到 ' + SITE + ' 的「我的 → MCP 接口」里勾上。' };
+  }
+
+  for (const t of terms) {
+    const r = await rpc(env, 'mcp_search_emojis', { p_token: token, p_query: t, p_limit: 20 });
+    if (!r.ok) return { ok: false, error: authText(r) };
+    if ((r.emojis || []).length) return { ok: true, term: t, kind: 'emoji', list: r.emojis };
+  }
+
+  const r = await rpc(env, 'mcp_recent_emojis', { p_token: token, p_limit: 30 });
+  if (!r.ok) return { ok: false, error: authText(r) };
+  if (!(r.emojis || []).length) return { ok: false, error: '站里还没有表情。' };
+  return { ok: true, term: '', kind: 'emoji', list: r.emojis };
+}
+
+// 从候选里随机挑不重复的几张。随机是故意的 ——
+// 同一个词每次都给同一张，聊几轮就穿帮了
+function genPick(list, n) {
+  const pool = (list || []).slice();
+  const out = [];
+  while (out.length < n && pool.length) {
+    out.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+  }
+  return out;
+}
+
+function bytesToB64(buf) {
+  const b = new Uint8Array(buf);
+  let s = '';
+  // 一次性 spread 进 fromCharCode 会爆栈，几百 KB 的图就够了
+  for (let i = 0; i < b.length; i += 0x8000) {
+    s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000));
+  }
+  return btoa(s);
+}
+
+/* 有些前端只认 base64（SD 那套接口就是强制的），那就得我们自己把图取回来。
+   取的时候同样不带来路，否则图床照样挡。 */
+async function genBytes(raw) {
+  let up;
+  try {
+    up = await fetch(String(raw), {
+      referrer: '', referrerPolicy: 'no-referrer',
+      headers: { accept: 'image/*,*/*;q=0.8', 'user-agent': 'Mozilla/5.0 (compatible; YowwMCP/1.0)' },
+      redirect: 'follow',
+      signal: AbortSignal.timeout(12000),
+      cf: { cacheEverything: true, cacheTtl: 86400 },
+    });
+  } catch (e) { return null; }
+  if (!up.ok) return null;
+  const type = up.headers.get('content-type') || '';
+  if (!/^image\//i.test(type)) return null;
+  const buf = await up.arrayBuffer();
+  // 太大的就不转了，base64 会再涨三分之一，塞进 JSON 前端也未必受得住
+  if (buf.byteLength > 3 * 1024 * 1024) return null;
+  return { b64: bytesToB64(buf), type };
+}
+
+// 提示词可能在 prompt / text / input 里，各家叫法不一样
+function genPrompt(body, url) {
+  const b = body && typeof body === 'object' ? body : {};
+  return String(b.prompt || b.text || b.input || b.q ||
+                url.searchParams.get('prompt') || url.searchParams.get('q') || '').slice(0, 2000);
+}
+
+async function readBody(req) {
+  if (req.method !== 'POST' && req.method !== 'PUT') return {};
+  try { return await req.json(); } catch (e) { return {}; }
+}
+
+/* OpenAI 那套：POST /v1/images/generations
+   回 { created, data: [ { url, b64_json, revised_prompt } ] }
+   url 和 b64_json 两个都给 —— 各家前端读哪个的都有，给全了省得挨个试。
+   前端明确说 response_format: "url" 时就不去取字节了，能省一个来回。 */
+async function genOpenAI(env, token, req, url, cors) {
+  const body = await readBody(req);
+  const prompt = genPrompt(body, url);
+  const n = Math.min(Math.max(parseInt(body.n, 10) || 1, 1), 4);
+
+  const found = await genFind(env, token, prompt);
+  if (!found.ok) {
+    return json({ error: { message: found.error, type: 'invalid_request_error' } }, 400, {}, cors);
+  }
+  const picks = genPick(found.list, n);
+  const wantB64 = body.response_format !== 'url';
+
+  const data = [];
+  for (const p of picks) {
+    const link = await proxyUrl(env, p.url, url.origin);
+    const item = { url: link, revised_prompt: oneLine(p.desc) || prompt };
+    if (wantB64) {
+      const bytes = await genBytes(p.url);
+      if (bytes) item.b64_json = bytes.b64;
+    }
+    data.push(item);
+  }
+  return json({ created: Math.floor(Date.now() / 1000), data }, 200, {}, cors);
+}
+
+/* SD WebUI 那套：POST /sdapi/v1/txt2img
+   这套接口规定了只能回 base64，没得选。 */
+async function genSD(env, token, req, url, cors) {
+  const body = await readBody(req);
+  const prompt = genPrompt(body, url);
+  const n = Math.min(Math.max(parseInt(body.batch_size, 10) || parseInt(body.n_iter, 10) || 1, 1), 4);
+
+  const found = await genFind(env, token, prompt);
+  if (!found.ok) return json({ error: found.error, detail: found.error }, 400, {}, cors);
+
+  const images = [];
+  for (const p of genPick(found.list, n)) {
+    const bytes = await genBytes(p.url);
+    if (bytes) images.push(bytes.b64);
+  }
+  if (!images.length) return json({ error: '图取不回来', detail: '图取不回来' }, 502, {}, cors);
+  return json({
+    images,
+    parameters: { prompt, batch_size: images.length },
+    info: JSON.stringify({ prompt, infotexts: [prompt] }),
+  }, 200, {}, cors);
+}
+
+/* 只会拼地址的前端：GET /gen?prompt=…  或  GET /gen/笑死.png
+   直接把图片本身回过去（转到中转地址上，缓存和防盗链一并解决）。 */
+async function genDirect(env, token, req, url, seg, cors) {
+  let prompt = url.searchParams.get('prompt') || url.searchParams.get('q') || '';
+  if (!prompt && seg.length > 1) {
+    try { prompt = decodeURIComponent(seg.slice(1).join('/')); } catch (e) { prompt = seg.slice(1).join('/'); }
+    prompt = prompt.replace(/\.(png|jpe?g|gif|webp)$/i, '');
+  }
+  const found = await genFind(env, token, prompt);
+  if (!found.ok) return new Response(found.error, { status: 400, headers: cors });
+  const pick = genPick(found.list, 1)[0];
+  if (!pick) return new Response('没挑到图', { status: 404, headers: cors });
+  const link = await proxyUrl(env, pick.url, url.origin);
+  return new Response(null, {
+    status: 302,
+    headers: Object.assign({ location: link, 'cache-control': 'no-store' }, cors),
+  });
+}
+
+/* 前端连上来之前会先探这几个地址，探不到就直接报"连接失败"，
+   连让用户点一下生成的机会都没有。回几个最小的假答案让它过关。 */
+function genProbe(path, cors) {
+  const one = { title: 'yoww', model_name: 'yoww', hash: null, sha256: null, filename: 'yoww', config: null };
+  if (path.endsWith('/sd-models')) return json([one], 200, {}, cors);
+  if (path.endsWith('/sdapi/v1/options')) return json({ sd_model_checkpoint: 'yoww' }, 200, {}, cors);
+  if (path.endsWith('/samplers')) return json([{ name: 'Euler a', aliases: ['k_euler_a'], options: {} }], 200, {}, cors);
+  if (path.endsWith('/schedulers')) return json([{ name: 'Automatic', label: 'Automatic' }], 200, {}, cors);
+  if (path.endsWith('/upscalers') || path.endsWith('/latent-upscale-modes') || path.endsWith('/loras')) {
+    return json([], 200, {}, cors);
+  }
+  if (path.endsWith('/models')) {
+    return json({ object: 'list', data: [
+      { id: 'yoww', object: 'model', created: 0, owned_by: 'yoww' },
+      { id: 'dall-e-3', object: 'model', created: 0, owned_by: 'yoww' },
+    ] }, 200, {}, cors);
+  }
+  return null;
+}
+
 /* ---------------- 令牌从哪来 ----------------
    两种都认：
    · Authorization: Bearer yoww_xxx  —— 更稳妥，令牌不会进浏览器历史和访问日志
@@ -731,13 +1034,39 @@ export default {
       return serveImage(env, url, seg[1], payload);
     }
 
+    /* 生图接口。跟 MCP 是两套东西，同一个 Worker、同一把令牌，
+       前端认哪套就接哪套，两套一起接也行。
+       探测用的那几个地址不查令牌 —— 有些前端先探通不通再让你填 key，
+       这时候拦下来，用户看到的就是"连接失败"，压根走不到填 key 那一步。 */
+    if (first === 'v1' || first === 'sdapi' || first === 'gen') {
+      const path = url.pathname;
+      const isGen = path.endsWith('/images/generations') || path.endsWith('/images/generation');
+      const isTxt = path.endsWith('/txt2img') || path.endsWith('/img2img');
+
+      if (!isGen && !isTxt && first !== 'gen') {
+        const probe = genProbe(path, cors);
+        if (probe) return probe;
+      }
+
+      const genToken = readToken(req, url);
+      if (!genToken) {
+        return json({ error: { message: '没带令牌。在这个绘图服务的「API Key / 密钥」那一栏填上 yoww_ 开头的令牌。', type: 'invalid_request_error' } }, 401, {}, cors);
+      }
+      if (isGen) return genOpenAI(env, genToken, req, url, cors);
+      if (isTxt) return genSD(env, genToken, req, url, cors);
+      if (first === 'gen') return genDirect(env, genToken, req, url, seg, cors);
+      return json({ error: { message: '这个地址没有。生图用 ' + url.origin + '/v1/images/generations 或 ' + url.origin + '/sdapi/v1/txt2img', type: 'invalid_request_error' } }, 404, {}, cors);
+    }
+
     const isMcp = first === 'mcp' || first === 'sse';
 
     if (!isMcp) {
       if (url.pathname === '/health') {
         return json({ ok: true, name: NAME, version: VERSION,
           // 有哪些功能，一眼看得出跑的是哪一版
-          has: ['selftest', 'list', 'format_page', 'custom_tpl', 'token_format', 'token_scopes', 'avatars', 'load_emoji_set', 'img_proxy'],
+          has: ['selftest', 'list', 'format_page', 'custom_tpl', 'token_format', 'token_scopes', 'avatars', 'load_emoji_set', 'img_proxy', 'image_gen'],
+          // 装成绘图接口的那几条路径，前端认哪条填哪条
+          image_api: ['/v1/images/generations', '/sdapi/v1/txt2img', '/gen?prompt='],
           tools: TOOLS.map(t => t.name) }, 200, {}, cors);
       }
       if (url.pathname === '/format') {
@@ -836,7 +1165,7 @@ function selftest() {
            background:#f3f0ea;border:1px solid #e6e1d9;display:block}
 </style>
 <h1>Yoww MCP 自检</h1>
-<p class="m">这页不经过任何 AI。它会自己走一遍握手、列工具、搜图，并把图真的渲染出来 —— 哪一步断了一眼就看得见。</p>
+<p class="m">这页不经过任何 AI。它会自己走一遍握手、列工具、搜图，把图真的渲染出来，最后再单独试一遍绘图接口 —— 哪一步断了一眼就看得见。</p>
 <input id="tok" placeholder="把令牌粘进来（yoww_ 开头）" autocomplete="off" spellcheck="false">
 <input id="q" placeholder="搜什么词，默认「笑」" style="margin-top:8px" autocomplete="off">
 <button id="go">开始检查</button>
@@ -910,6 +1239,29 @@ $('go').addEventListener('click', async ()=>{
       im.onerror=()=>{ done++; cap.innerHTML='<span class="bad">加载失败</span><br>'+e.url; finish(); };
       c.appendChild(im); c.appendChild(cap); g.appendChild(c);
     });
+
+    // 第 6 步查的是另一条路：前端把我们当绘图服务调。
+    // 这一步通了，就说明"AI 不用贴链接也能出图"那条路是通的 ——
+    // 剩下的只是去前端的绘图设置里填两个框
+    const d6=step('6. 绘图接口（前端不认链接时走这条）');
+    const gr=await fetch('/v1/images/generations',{method:'POST',
+      headers:{'content-type':'application/json',authorization:'Bearer '+tok},
+      body:JSON.stringify({prompt:q,n:1,response_format:'url'})});
+    const gj=await gr.json().catch(()=>null);
+    const gurl=gj&&gj.data&&gj.data[0]&&gj.data[0].url;
+    if(!gurl){ mark(d6,false,'没返回图',
+      String((gj&&gj.error&&gj.error.message)||('HTTP '+gr.status)).slice(0,200)); }
+    else{
+      const g6=document.createElement('div'); g6.className='grid'; d6.appendChild(g6);
+      const c6=document.createElement('div'); c6.className='cell';
+      const i6=new Image(); i6.src=gurl; i6.alt='';
+      const p6=document.createElement('div'); p6.textContent='加载中…';
+      i6.onload=()=>{ mark(d6,true,'通了 —— 把绘图地址填进前端的绘图设置就能用');
+        p6.textContent=String(gj.data[0].revised_prompt||'').slice(0,14); };
+      i6.onerror=()=>{ mark(d6,false,'返回了地址但图打不开',gurl);
+        p6.innerHTML='<span class="bad">加载失败</span>'; };
+      c6.appendChild(i6); c6.appendChild(p6); g6.appendChild(c6);
+    }
   }catch(err){ const d=step('出错了'); mark(d,false,String(err&&err.message||err)); }
   finally{ $('go').disabled=false; }
 });
@@ -1135,6 +1487,29 @@ function landing() {
 <p>地址永远是 <code>https://mcp.yoww2026.cn/mcp</code>，别往后面加参数：
 有些前端会按 MCP 服务配置算哈希拼进工具名，地址一改哈希就变，
 老对话里的调用记录跟新的对不上，整个对话会直接报错。</p>
+<h2>换写法也没用：把我们当绘图服务</h2>
+<p>有一类前端，AI 消息里的图<b>根本不走 Markdown</b> —— 不管 AI 吐的是
+<code>![](…)</code>、<code>&lt;img&gt;</code> 还是裸链接，它一律当纯文本显示。
+这不是写法问题，是那条路不存在，换几种格式都一样。</p>
+<p>但同一个前端，<b>生图是能出图的</b>。因为生图走的是另一条路：
+AI 说要画图，前端自己拿着提示词去调绘图 API，拿回来的图由前端自己插进消息里 ——
+跟用户自己发的图同一条路，那条一直是通的。</p>
+<p>所以我们也同时装成一个绘图服务。AI 说「发个笑死的表情」，
+前端把「笑死」当提示词发过来，我们不画，直接从站里挑一张现成的表情回给它，
+它当成自己画的显示出来。AI 不用贴链接，你也不用复制粘贴。</p>
+<p>在前端的<b>绘图设置</b>里填（密钥就填同一个令牌）：</p>
+<ul>
+<li>选项里有「OpenAI / DALL·E / 自定义 OpenAI 接口」→ 地址填
+<pre>https://mcp.yoww2026.cn/v1</pre></li>
+<li>选项里有「Stable Diffusion WebUI / AUTOMATIC1111」→ 地址填
+<pre>https://mcp.yoww2026.cn</pre></li>
+<li>只能填一条出图网址的 → 填
+<pre>https://mcp.yoww2026.cn/gen?prompt={prompt}&amp;key=你的令牌</pre></li>
+</ul>
+<p>提示词写中文短词最准（「笑死」「无语」「摸头」）。整句英文提示词我们也会自己拆词去搜，
+实在搜不到就给一张站里最新的 —— 宁可发得不那么贴切，也不让前端弹一个生图失败。
+想要头像就在提示词里带上「头像」两个字。</p>
+<p>两条路可以同时接：MCP 那条让 AI 能搜、能看描述词，绘图这条保证图真的显示得出来。</p>
 <p>不确定是哪一步出的问题，打开 <a href="/selftest">/selftest</a> 自己跑一遍，
 它不经过 AI，直接告诉你是服务器、令牌、搜索还是图片加载断了。</p>
 <h2>配好之后能干嘛</h2>

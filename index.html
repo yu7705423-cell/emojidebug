@@ -5368,6 +5368,15 @@ async function openMcpSheet(){
       ${copyRowHtml('服务地址', mcpUrl(), 'mcpUrl')}
       <p class="field-help">在 AI 前端里加一个 MCP 服务，类型选 <b>Streamable HTTP</b>，地址填它。</p>
 
+      <div class="field-label">图发不出来？走这条</div>
+      <p class="field-help">很多前端只显示「它自己取回来的图」，AI 贴的链接一律当文字。
+        这种就把我们当成<b>绘图服务</b>填进去：AI 说要发表情，前端自己来我们这儿取，
+        取回去的图走它原生的显图那条路，就出得来了。不用复制粘贴。</p>
+      ${copyRowHtml('绘图地址 · OpenAI 兼容', MCP_BASE + '/v1', 'mcpImgA')}
+      ${copyRowHtml('绘图地址 · SD WebUI 兼容', MCP_BASE, 'mcpImgB')}
+      <p class="field-help">前端的绘图设置里有哪种就填哪种，密钥 / API Key 填<b>同一个令牌</b>。
+        权限跟着令牌走，没勾头像就搜不到头像。</p>
+
       <div class="field-label">我的令牌</div>
       <p class="field-help">一个前端配一个。能看什么、怎么出图都跟着令牌走，各自互不影响。</p>
       ${rows}
