@@ -400,15 +400,15 @@
   /* 非图片条目：字体和铃声没有缩略图。给一块同尺寸的牌子，
      不要留个破图框 —— 字体那块干脆用字体本身渲染，一眼能认出是哪一款 */
   .repo-chip-tile{position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px; padding:8px; text-align:center; background:var(--bg-elev); color:var(--text-dim);}
-  .repo-chip-tile .mark{font-size:26px; line-height:1.2; font-weight:600; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:100%;}
+  .repo-chip-tile .mark{font-size:var(--m, 26px); line-height:1.2; font-weight:600; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:100%;}
   .repo-chip-tile svg{width:24px; height:24px;}
   .repo-chip-tile .kind{font-size:10px; letter-spacing:.06em; color:var(--text-faint);}
   .rfc-cell .repo-chip-tile{gap:0; padding:2px;}
-  .rfc-cell .repo-chip-tile .mark{font-size:13px;}
+  .rfc-cell .repo-chip-tile .mark{font-size:13px;}   /* 封面里的小格子一律 13px，盖掉 --m */
   .rfc-cell .repo-chip-tile svg{width:13px; height:13px;}
   .rfc-cell .repo-chip-tile .kind{display:none;}
   /* 条目详情里的预览：字体给一行大字，铃声给原生播放器 */
-  .ri-font-prev{width:100%; padding:20px 12px; margin-bottom:12px; text-align:center; font-size:30px; line-height:1.45; word-break:break-word; background:var(--bg-elev); border-radius:var(--radius-s); color:var(--text);}
+  .ri-font-prev{width:100%; padding:20px 12px; margin-bottom:12px; text-align:center; font-size:var(--m, 30px); line-height:1.45; word-break:break-word; background:var(--bg-elev); border-radius:var(--radius-s); color:var(--text);}
   .ri-audio-prev{width:100%; margin-bottom:12px;}
   .repo-empty{text-align:center; color:var(--text-faint); font-size:12.5px; padding:56px 24px; line-height:1.9;}
   /* 文件夹卡片：跟 .repo-cell 共用外层结构（.ph/.cap），封面换成 2x2 小拼图 */
@@ -3509,20 +3509,50 @@ const REPO_DB = 'yoww_repo';
 const REPO_VER = 2;
 let repoDb = null;
 
-// 仓库里不止表情：头像和头像框存的是图，字体存的是字体文件，铃声存的是音频。
-// 老条目没有 type 这一栏，读的时候一律当图片 —— 所以不用改库结构，也不用写迁移。
+// 仓库里不止表情。分两层看：
+//   type  —— 这是什么内容（表情 / 头像 / 头像框 / 字体 / 铃声），决定标签和角标
+//   file  —— 这是什么文件（图 / 字体 / 音频），决定怎么渲染、怎么抓、收什么 MIME
+// 分两层是因为头像和头像框都是图，文件层面没区别，但在仓库里必须分得开。
+// 老条目要么没有 type 这一栏，要么是上一版的 'image' —— 两种都当表情，
+// 因为那时候仓库本来就只装表情。不用改库结构，也不用写迁移。
+const REPO_TYPES = {
+  emoji:  { label:'表情',   file:'image' },
+  avatar: { label:'头像',   file:'image' },
+  frame:  { label:'头像框', file:'image' },
+  font:   { label:'字体',   file:'font'  },
+  audio:  { label:'铃声',   file:'audio' },
+};
 // accept 放得宽是因为字体图床十有八九回 application/octet-stream，
 // 光看 MIME 会全军覆没；真正把关的是体积。
-const REPO_TYPES = {
-  image: { label:'图片', accept:['image/'], cap:  8*1024*1024 },
-  font:  { label:'字体', accept:['font/','application/font','application/x-font','application/octet-stream'], cap: 20*1024*1024 },
-  audio: { label:'铃声', accept:['audio/','application/ogg','application/octet-stream'], cap: 20*1024*1024 },
+// 字体和音频的上限比图片高得多：这些东西本来就大，而且都存在用户自己机器上
+const REPO_FILES = {
+  image: { accept:['image/'], cap:  8*1024*1024 },
+  font:  { accept:['font/','application/font','application/x-font','application/octet-stream'], cap: 64*1024*1024 },
+  audio: { accept:['audio/','application/ogg','application/octet-stream'], cap: 32*1024*1024 },
 };
-function repoType(it){ const t = it && it.type; return REPO_TYPES[t] ? t : 'image'; }
-function repoIsImage(it){ return repoType(it) === 'image'; }
+function repoType(it){ const t = it && it.type; return REPO_TYPES[t] ? t : 'emoji'; }
+function repoFileKind(it){ return REPO_TYPES[repoType(it)].file; }
+function repoIsImage(it){ return repoFileKind(it) === 'image'; }
 function repoTypeLabel(it){ return REPO_TYPES[repoType(it)].label; }
 // 混着放之后「张」就不对了。整批都是图才说张，掺了字体铃声就说项
 function repoUnit(list){ return (list||[]).every(repoIsImage) ? '张' : '项'; }
+// 种类图标。文件夹角标用它 —— 一眼看出这一组是头像还是头像框，
+// 光看 2x2 封面是分不出来的（两者都是图）
+function repoTypeIcon(t){
+  const d = {
+    emoji:  '<circle cx="12" cy="12" r="9"/><path d="M8.5 14.3a4.6 4.6 0 0 0 7 0"/><path d="M9 9.5h.01M15 9.5h.01"/>',
+    avatar: '<circle cx="12" cy="9" r="3.6"/><path d="M5.5 19.6a6.5 6.5 0 0 1 13 0"/>',
+    frame:  '<rect x="3.5" y="3.5" width="17" height="17" rx="2.5"/><circle cx="12" cy="10" r="2.4"/><path d="M7.5 17.5a4.5 4.5 0 0 1 9 0"/>',
+    font:   '<path d="M5 19l6.2-14h1.6L19 19"/><path d="M8 14h8"/>',
+    audio:  '<path d="M9 18V5l10-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="16" cy="16" r="3"/>',
+  };
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${d[t]||d.emoji}</svg>`;
+}
+// 一整组是不是清一色的某一种。混着放就说不出来，返回空，角标退回文件夹图标
+function repoPackType(items){
+  const seen = new Set((items||[]).map(repoType));
+  return seen.size === 1 ? Array.from(seen)[0] : '';
+}
 
 function openRepoDb(){
   if(repoDb) return Promise.resolve(repoDb);
@@ -3636,12 +3666,13 @@ async function repoGetBlob(id){
 // 跟分享卡片遇到的是同一个问题，复用同一个解法。
 async function fetchRepoBlob(url, type){
   if(!url) return null;
-  const cfg = REPO_TYPES[REPO_TYPES[type] ? type : 'image'];
+  const kind = REPO_TYPES[type] ? REPO_TYPES[type].file : (REPO_FILES[type] ? type : 'image');
+  const cfg = REPO_FILES[kind];
   try{
     // 图片走代理那一套；字体和铃声不行 —— exportableUrl 是拿 <img> 试出来的，
     // 一个 ttf 永远试不过。这两类直接取原链接，对方不给跨域就算了，
     // 条目和链接都还在，只是没有离线副本
-    const good = (type && type !== 'image') ? url : await exportableUrl(url);
+    const good = kind === 'image' ? await exportableUrl(url) : url;
     if(!good) return null;
     const res = await fetch(good);
     if(!res.ok) return null;
@@ -3665,7 +3696,7 @@ async function repoAdd(rows){
     if(r.url && seen.has(key)) continue;
     if(r.url) seen.add(key);
     fresh.push(Object.assign({
-      id: uid()+Date.now().toString(36), source:'mine', type:'image', url:'', desc:'', folder:'', pack:'', origin:'',
+      id: uid()+Date.now().toString(36), source:'mine', type:'emoji', url:'', desc:'', folder:'', pack:'', origin:'',
       hasBlob:false, addedAt: Date.now(), fromTitle:'', fromAuthor:'', fromCategory:'', fromTags:[],
     }, r));
   }
@@ -3988,7 +4019,7 @@ applyTheme();
 // 用户自己分的类反而被淹掉。
 let repoTab = 'site';           // 'site' | 'mine'
 let repoFolderFilter = 'all';   // 分类：'all' | 'none' | folderId
-let repoOpenPack = null;        // 文件夹：null = 还在文件夹列表这一层；'' = 零散图片
+let repoOpenPack = null;        // 文件夹：null = 还在文件夹列表这一层；'' = 零散条目
 let repoPickMode = false;
 let repoPicked = new Set();
 // 文件夹这一层也能多选：长按任意一个进入，之后点选。选中的是文件夹名。
@@ -4050,7 +4081,7 @@ function repoKnownOrigins(){
 async function saveDownloadToRepo(c, chosen, descOf){
   if(!repoReady) return;
   const rows = chosen.map(e=>({
-    source:'site', url:e.url, desc: descOf(e) || '',
+    source:'site', type:'emoji', url:e.url, desc: descOf(e) || '',
     pack: (c.title||'').trim(),
     fromTitle: c.title || '', fromAuthor: c.author || '',
     fromCategory: c.category || '',
@@ -4073,7 +4104,7 @@ async function saveMyWorkToRepo(pack, items, fallbackOrigin, folder){
   const rows = items
     .filter(it=>it.url.trim())
     .map(it=>({
-      source:'mine', url: it.url.trim(), desc: (it.desc||'').trim(),
+      source:'mine', type:'emoji', url: it.url.trim(), desc: (it.desc||'').trim(),
       pack: String(pack||'').trim(), folder: folder || '',
       // 来源：这张图自己标了就用它的，没标才退回整批统一的那个
       origin: (it.source || fallbackOrigin || '').trim(),
@@ -4147,7 +4178,7 @@ function repoPackTiles(folderId){
   });
   const named = [], loose = [];
   byPack.forEach((items, k)=>{
-    (k ? named : loose).push({ pack:k, name: k || '零散图片', items });
+    (k ? named : loose).push({ pack:k, name: k || '零散条目', items });
   });
   named.sort((a,b)=> b.items[0].addedAt - a.items[0].addedAt);
   return named.concat(loose);
@@ -4192,7 +4223,7 @@ function renderRepo(){
                 ? '尚未从站内下载过内容。<br>在作品详情页下载并导出后，会自动存入这里。'
                 : '尚未添加内容。<br>点击右上角的加号，可粘贴链接、导入 txt / docx 或从相册选图。')}</div>`;
   } else {
-    const packName = repoOpenPack || '零散图片';
+    const packName = repoOpenPack || '零散条目';
     mainHtml = `<div class="repo-folder-crumb" id="repoPackCrumb">‹ ${esc(folderName)} · ${esc(packName)}</div>
       ${items.length
         ? `<div class="emoji-grid" id="repoGrid">${items.map(repoCellHtml).join('')}</div>`
@@ -4300,18 +4331,24 @@ function renderRepo(){
 // 一个格子的缩略图。图片照旧；字体用它自己渲染一个「Aa」，铃声给个音符牌。
 // 抽出来是因为文件夹封面那个 2x2 拼图要用同一套 —— 一组字体的封面
 // 如果是四个破图框，那个文件夹就等于瞎了
+// 牌子上写字体名本身，不写「Aa」—— 两款字体万一都没加载出来，
+// 一排一模一样的 Aa 等于什么也没说，名字至少还分得开。
+// 本机传进来的字体没有链接，face 只能从 blob 里来，那是异步的：
+// 先留个 data-fontblob 记号，fillRepoFonts 随后把 font-family 补上
+function repoFontMarkHtml(it, cls, max, sizes){
+  const sample = String(it.desc || it.fromTitle || 'Aa').slice(0, max);
+  const size = sizes[Math.min(sample.length, sizes.length) - 1] || sizes[sizes.length-1];
+  const fam = String(it.url||'').trim() ? ensureFontFace({ id: it.id, url: it.url }) : '';
+  const mark = fam ? `font-family:'${fam}'; ` : '';
+  return `<div class="${cls}"${fam?'':` data-fontblob="${esc(it.id)}"`} style="${mark}--m:${size}px;">${esc(sample)}</div>`;
+}
 function repoThumbHtml(it){
-  const t = repoType(it);
-  if(t === 'font'){
-    const fam = ensureFontFace({ id: it.id, url: it.url });
-    // 牌子上写字体名本身，不写「Aa」—— 两款字体万一都没加载出来，
-    // 一排一模一样的 Aa 等于什么也没说，名字至少还分得开
-    const sample = String(it.desc || it.fromTitle || 'Aa').slice(0, 4);
-    const size = sample.length <= 2 ? 26 : sample.length <= 3 ? 22 : 18;
-    return `<div class="repo-chip-tile"><div class="mark" style="font-family:'${fam}'; font-size:${size}px;">${esc(sample)}</div><div class="kind">字体</div></div>`;
+  const k = repoFileKind(it);
+  if(k === 'font'){
+    return `<div class="repo-chip-tile">${repoFontMarkHtml(it, 'mark', 4, [26,26,22,18])}<div class="kind">字体</div></div>`;
   }
-  if(t === 'audio'){
-    return `<div class="repo-chip-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l10-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="16" cy="16" r="3"/></svg><div class="kind">铃声</div></div>`;
+  if(k === 'audio'){
+    return `<div class="repo-chip-tile">${repoTypeIcon('audio')}<div class="kind">铃声</div></div>`;
   }
   return it.hasBlob ? `<img data-blob="${esc(it.id)}" alt="">`
                     : `<img src="${esc(it.url)}" alt="" loading="lazy" referrerpolicy="no-referrer" ${FADE_ATTR} onerror="this.style.opacity=0">`;
@@ -4344,25 +4381,41 @@ function repoPackTileHtml(t){
   return `<div class="repo-cell${picked?' sel':''}" data-openpack="${esc(t.pack)}">
     <div class="ph">
       ${repoFolderCoverHtml(t.items)}
-      <div class="repo-folder-badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg></div>
+      <div class="repo-folder-badge">${repoPackType(t.items)
+        ? repoTypeIcon(repoPackType(t.items))
+        : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>'}</div>
       ${repoPackPickMode ? `<div class="pick ${picked?'on':''}">${picked?'<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>':''}</div>` : ''}
     </div>
     <div class="cap">${esc(t.name)} · ${t.items.length} ${repoUnit(t.items)}</div>
   </div>`;
 }
 
+// 本地文件在 DOM 里只留了个 id 记号，这里统一换成 objectURL。
+// objectURL 缓存在 repoBlobUrls 里，一是省得重复建，二是 @font-face 的
+// family 名是按地址哈希出来的 —— 地址每次都变的话，同一个字体会被反复加载
+async function repoBlobUrl(id){
+  let u = repoBlobUrls.get(id);
+  if(u) return u;
+  const blob = await repoGetBlob(id);
+  if(!blob) return null;
+  u = URL.createObjectURL(blob);
+  repoBlobUrls.set(id, u);
+  return u;
+}
 async function fillRepoBlobs(root){
-  const els = Array.from(root.querySelectorAll('img[data-blob]'));
-  for(const el of els){
-    const id = el.dataset.blob;
-    let u = repoBlobUrls.get(id);
-    if(!u){
-      const blob = await repoGetBlob(id);
-      if(!blob) continue;
-      u = URL.createObjectURL(blob);
-      repoBlobUrls.set(id, u);
-    }
-    el.src = u;
+  for(const el of Array.from(root.querySelectorAll('img[data-blob]'))){
+    const u = await repoBlobUrl(el.dataset.blob);
+    if(u) el.src = u;
+  }
+  for(const el of Array.from(root.querySelectorAll('audio[data-audioblob]'))){
+    const u = await repoBlobUrl(el.dataset.audioblob);
+    if(u) el.src = u;
+  }
+  for(const el of Array.from(root.querySelectorAll('[data-fontblob]'))){
+    const id = el.dataset.fontblob;
+    const u = await repoBlobUrl(id);
+    if(!u) continue;
+    el.style.fontFamily = `'${ensureFontFace({ id, url: u })}'`;
   }
 }
 
@@ -4455,19 +4508,45 @@ function openRepoMoveSheet(){
 }
 
 /* ---- 添加 / 编辑单条 ---- */
+// 「从本机选」那一块跟着上面的类型 chip 换文案和 accept。
+// 做成一块而不是并排三块，是因为一批本来就只能是一种 —— 三个按钮摆那儿
+// 只会让人以为可以混着传
+const REPO_LOCAL_PICK = {
+  image: { label:'或者从相册选图', btn:'选择图片', accept:'image/*',
+           help:'图片仅保存在本机浏览器中，不会上传。<b>本地图片无法一键上传发布</b>，需先上传图床取得链接。' },
+  font:  { label:'或者从本机选字体文件', btn:'选择字体文件', accept:'.ttf,.otf,.ttc,.woff,.woff2,font/*',
+           help:'ttf / otf / woff 都行，文件只存在你自己的浏览器里，不会上传。自己买的、没有公开链接的字体放这儿正合适 —— 占的是你自己的空间，不限大小。<b>本地字体无法一键上传发布</b>。' },
+  audio: { label:'或者从本机选音频', btn:'选择音频文件', accept:'.mp3,.m4a,.aac,.wav,.ogg,.flac,audio/*',
+           help:'音频只存在你自己的浏览器里，不会上传。<b>本地音频无法一键上传发布</b>。' },
+};
+function syncRepoLocalPick(kind){
+  const c = REPO_LOCAL_PICK[kind] || REPO_LOCAL_PICK.image;
+  const L=$('raLocalLabel'), H=$('raLocalHelp'), B=$('raPickFile'), F=$('raFile');
+  if(L) L.textContent = c.label;
+  if(H) H.innerHTML = c.help;
+  if(B) B.textContent = c.btn;
+  if(F) F.accept = c.accept;
+}
+// 挑出来的文件算不算数。图片看 MIME 就够了；字体和音频不行 ——
+// 系统给 ttf 的 MIME 五花八门，空的都有，所以以扩展名为准
+function repoLocalFileOk(f, kind){
+  if(kind === 'font')  return /\.(ttf|otf|ttc|woff2?)$/i.test(f.name) || /font/i.test(f.type||'');
+  if(kind === 'audio') return /\.(mp3|m4a|aac|wav|ogg|flac)$/i.test(f.name) || String(f.type||'').startsWith('audio/');
+  return String(f.type||'').startsWith('image/');
+}
 function openRepoAddSheet(){
   let text = '';
   let addFolder = '';   // 归入哪个分类，默认未分类
   let addPack = '';     // 这一批的文件夹名，导入文件时自动取文件名
-  let addType = 'image';// 这一批是图、字体还是铃声。一批只能是一种 —— 混着粘贴
-                        // 也分不出哪行是什么，不如让人分两次粘
+  let addType = 'emoji';// 这一批是什么。一批只能是一种 —— 混着粘贴也分不出
+                        // 哪行是什么，不如让人分两次粘
   $('repoSheetMask').classList.add('open');
   $('repoSheetBox').innerHTML = `
     <div class="sheet-head"><span class="t">添加内容</span><button class="icon-btn" id="raClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button></div>
     <div class="sheet-scroll">
       <div class="field-label" style="margin-top:0;">这一批是什么</div>
       <div class="chip-row" id="raTypeChips">
-        ${Object.keys(REPO_TYPES).map(k=>`<button class="chip ${k==='image'?'active':''}" data-rtype="${k}">${esc(REPO_TYPES[k].label)}</button>`).join('')}
+        ${Object.keys(REPO_TYPES).map(k=>`<button class="chip ${k==='emoji'?'active':''}" data-rtype="${k}">${esc(REPO_TYPES[k].label)}</button>`).join('')}
       </div>
       <div class="field-label">归入哪个分类</div>
       <div class="chip-row" id="raFolderChips">
@@ -4475,7 +4554,7 @@ function openRepoAddSheet(){
         ${repoFolders.map(f=>`<button class="chip" data-to="${esc(f.id)}">${esc(f.name)}</button>`).join('')}
       </div>
       <div class="field-label">文件夹名称</div>
-      <input class="field-input" id="raPack" maxlength="20" placeholder="这一批的名称，留空则并入零散图片">
+      <input class="field-input" id="raPack" maxlength="20" placeholder="这一批的名称，留空则并入零散条目">
       <p class="field-help">分类是你自己划分的大类，长期使用；文件夹是这一次添加的这一批。导入 txt / docx 时会自动用文件名。</p>
       <div class="field-label">来源（可选）</div>
       <input class="field-input" id="raOrigin" maxlength="20" placeholder="例如：小红书 @某某，留空则不填">
@@ -4499,8 +4578,8 @@ function openRepoAddSheet(){
       <input type="file" id="raDocFile" accept=".txt,.docx">
       <p class="field-help">格式跟发布页的导入一样，「描述+分隔符+链接」或者只有链接都行。txt / docx 会读取为文本追加到上方，可先修改再添加。</p>
       <div class="btn-row"><button class="btn-solid" id="raAddUrl">加进仓库</button></div>
-      <div class="field-label">或者从相册选图</div>
-      <p class="field-help">图片仅保存在本机浏览器中，不会上传。<b>本地图片无法一键上传发布</b>，需先上传图床取得链接。</p>
+      <div class="field-label" id="raLocalLabel">或者从相册选图</div>
+      <p class="field-help" id="raLocalHelp">图片仅保存在本机浏览器中，不会上传。<b>本地图片无法一键上传发布</b>，需先上传图床取得链接。</p>
       <div class="btn-row"><button class="btn-outline" id="raPickFile">选择图片</button></div>
       <input type="file" id="raFile" accept="image/*" multiple>
     </div>`;
@@ -4547,6 +4626,7 @@ function openRepoAddSheet(){
       addType = b.dataset.rtype;
       $('repoSheetBox').querySelectorAll('#raTypeChips .chip').forEach(c=>c.classList.remove('active'));
       b.classList.add('active');
+      syncRepoLocalPick(REPO_TYPES[addType].file);
     });
   });
   bindFolderChips();
@@ -4573,10 +4653,15 @@ function openRepoAddSheet(){
     if(!files.length) return;
     const originVal = ($('raOrigin')?.value || '').trim();
     addPack = ($('raPack')?.value || '').trim().slice(0,20);
-    let n = 0;
+    const kind = REPO_TYPES[addType].file;
+    const unit = kind === 'image' ? '张' : '项';
+    let n = 0, skipped = 0;
     for(const f of files){
-      if(!f.type.startsWith('image/')) continue;
-      const added = await repoAdd([{ source:'mine', url:'', desc: f.name.replace(/\.[^.]+$/,'').slice(0,20), folder:addFolder, pack:addPack, origin:originVal }]);
+      // 本机文件不设上限 —— 占的是用户自己的磁盘，我没有资格替他省。
+      // 真存不下的时候 IndexedDB 会抛，下面那句照实告诉他
+      if(!repoLocalFileOk(f, kind)){ skipped++; continue; }
+      const added = await repoAdd([{ source:'mine', type:addType, url:'',
+        desc: f.name.replace(/\.[^.]+$/,'').slice(0,20), folder:addFolder, pack:addPack, origin:originVal }]);
       if(!added.length) continue;
       try{ await repoPutBlob(added[0].id, f); n++; }
       catch(err){ showToast('保存失败，浏览器存储空间可能已满'); break; }
@@ -4584,20 +4669,22 @@ function openRepoAddSheet(){
     e.target.value = '';
     $('repoSheetMask').classList.remove('open');
     if(n){ repoTab='mine'; repoFolderFilter = addFolder || 'none'; repoOpenPack = addPack; }
-    showToast(n ? `已添加 ${n} 张` : '未添加任何图片');
+    showToast(n ? `已添加 ${n} ${unit}${skipped?`，跳过 ${skipped} 个格式不对的`:''}`
+                : `未添加任何${REPO_TYPES[addType].label}`);
     renderRepo();
   });
 }
 
 // 条目详情里的大预览。字体直接拿描述词当样张 —— 比一句「这是个字体」有用得多
 function repoPreviewHtml(it){
-  const t = repoType(it);
-  if(t === 'font'){
-    const fam = ensureFontFace({ id: it.id, url: it.url });
-    return `<div class="ri-font-prev" style="font-family:'${fam}';">${esc((it.desc || '字体预览').slice(0, 12))}</div>`;
+  const k = repoFileKind(it);
+  if(k === 'font'){
+    return repoFontMarkHtml(it, 'ri-font-prev', 12, [34,34,30,30,26,26,22,22,20,20,18,18]);
   }
-  if(t === 'audio'){
-    return `<audio class="ri-audio-prev" controls preload="none" crossorigin="anonymous" src="${esc(it.url)}"></audio>`;
+  if(k === 'audio'){
+    return String(it.url||'').trim()
+      ? `<audio class="ri-audio-prev" controls preload="none" crossorigin="anonymous" src="${esc(it.url)}"></audio>`
+      : `<audio class="ri-audio-prev" controls preload="none" data-audioblob="${esc(it.id)}"></audio>`;
   }
   return `<div style="display:flex; justify-content:center; margin-bottom:12px;">
           <img id="riImg" src="${it.hasBlob?'':esc(it.url)}" alt="" referrerpolicy="no-referrer" style="max-width:160px; max-height:160px; border-radius:var(--radius-s);" onerror="this.style.opacity=0">
@@ -4622,7 +4709,7 @@ function openRepoItemSheet(it){
         ${repoKnownOrigins().length ? `<div class="chip-row" style="margin-top:8px;">${
           repoKnownOrigins().map(o=>`<button class="chip" data-origin="${esc(o)}">${esc(o)}</button>`).join('')}</div>` : ''}
         <div class="field-label">文件夹</div>
-        <input class="field-input" id="riPack" maxlength="20" value="${esc(it.pack||'')}" placeholder="留空则并入零散图片">
+        <input class="field-input" id="riPack" maxlength="20" value="${esc(it.pack||'')}" placeholder="留空则并入零散条目">
         <div class="field-label">分类</div>
         <div class="chip-row">
           <button class="chip ${!it.folder?'active':''}" data-to="">未分类</button>
@@ -7118,7 +7205,7 @@ function openPubToRepoSheet(validItems){
         ${repoFolders.map(f=>`<button class="chip" data-to="${esc(f.id)}">${esc(f.name)}</button>`).join('')}
       </div>
       <div class="field-label">文件夹名称</div>
-      <input class="field-input" id="ptrPack" maxlength="20" placeholder="这一批的名称，留空则并入零散图片">
+      <input class="field-input" id="ptrPack" maxlength="20" placeholder="这一批的名称，留空则并入零散条目">
       <p class="field-help">分类是你自己划分的大类，长期使用；文件夹是这一次存入的这一批。</p>
       <div class="field-label">来源（可选）</div>
       <input class="field-input" id="ptrOrigin" maxlength="20" placeholder="例如：小红书 @某某，留空则不填">
@@ -7498,17 +7585,17 @@ function renderPostDetail(justToggled){
     list.forEach((x, i)=>{
       // 情侣一对拆成两条，描述里标上左右 —— 不标的话在仓库里认不出哪两张是一对
       if(pair && x.url2){
-        rows.push({ type:'image', url:x.url,  desc:`${pt.title} ${i+1} 左`.slice(0,20) });
-        rows.push({ type:'image', url:x.url2, desc:`${pt.title} ${i+1} 右`.slice(0,20) });
+        rows.push({ type:'avatar', url:x.url,  desc:`${pt.title} ${i+1} 左`.slice(0,20) });
+        rows.push({ type:'avatar', url:x.url2, desc:`${pt.title} ${i+1} 右`.slice(0,20) });
       } else {
-        rows.push({ type:'image', url:x.url, desc:(list.length>1?`${pt.title} ${i+1}`:pt.title).slice(0,20) });
+        rows.push({ type:'avatar', url:x.url, desc:(list.length>1?`${pt.title} ${i+1}`:pt.title).slice(0,20) });
       }
     });
     saveSiteRowsToRepo(rows, pt.title, { title:pt.title, author:pt.author_nickname, category:pt.category, tags:pt.tags });
   });
   const afRepo = $('afToRepo');
   if(afRepo) afRepo.addEventListener('click', ()=>{
-    saveSiteRowsToRepo([{ type:'image', url:pt.url, desc:String(pt.title||'头像框').slice(0,20) }],
+    saveSiteRowsToRepo([{ type:'frame', url:pt.url, desc:String(pt.title||'头像框').slice(0,20) }],
       pt.title, { title:pt.title, author:pt.author_nickname, category:pt.category, tags:pt.tags });
   });
   const ringRepo = $('ringToRepo');
