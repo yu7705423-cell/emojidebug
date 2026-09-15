@@ -3531,10 +3531,43 @@ const REPO_FILES = {
   font:  { accept:['font/','application/font','application/x-font','application/octet-stream'], cap: 64*1024*1024 },
   audio: { accept:['audio/','application/ogg','application/octet-stream'], cap: 32*1024*1024 },
 };
+// 扩展名 <-> MIME。备份包里要写准这一栏：一个被标成 image/png 的音频
+// blob，恢复回来 <audio> 直接放不出声；字体虽然 FontFace 不挑 MIME，
+// 但存错了就是存错了，下一个用到它的人得替我擦屁股
+const REPO_MIME_BY_EXT = {
+  '.ttf':'font/ttf', '.otf':'font/otf', '.ttc':'font/collection', '.woff':'font/woff', '.woff2':'font/woff2',
+  '.mp3':'audio/mpeg', '.m4a':'audio/mp4', '.aac':'audio/aac', '.wav':'audio/wav', '.ogg':'audio/ogg', '.flac':'audio/flac',
+  '.png':'image/png', '.jpg':'image/jpeg', '.jpeg':'image/jpeg', '.gif':'image/gif', '.webp':'image/webp',
+};
+const REPO_EXT_BY_MIME = {
+  'font/ttf':'.ttf', 'font/otf':'.otf', 'font/collection':'.ttc', 'font/woff':'.woff', 'font/woff2':'.woff2',
+  'application/x-font-ttf':'.ttf', 'application/font-woff':'.woff',
+  'audio/mpeg':'.mp3', 'audio/mp4':'.m4a', 'audio/aac':'.aac', 'audio/wav':'.wav', 'audio/x-wav':'.wav',
+  'audio/ogg':'.ogg', 'audio/flac':'.flac',
+  'image/png':'.png', 'image/jpeg':'.jpg', 'image/gif':'.gif', 'image/webp':'.webp', 'image/svg+xml':'.svg',
+};
+const REPO_KIND_MIME = { image:'image/png', font:'font/ttf', audio:'audio/mpeg' };
+const REPO_KIND_EXT  = { image:'.png',      font:'.ttf',     audio:'.mp3' };
 function repoType(it){ const t = it && it.type; return REPO_TYPES[t] ? t : 'emoji'; }
 function repoFileKind(it){ return REPO_TYPES[repoType(it)].file; }
 function repoIsImage(it){ return repoFileKind(it) === 'image'; }
 function repoTypeLabel(it){ return REPO_TYPES[repoType(it)].label; }
+// blob 自己的 MIME 常常是空的 —— 系统给 ttf 的 MIME 五花八门，空字符串都有。
+// 空着就按存条目时记下的扩展名补，再退回按种类给一个，绝不一律当 png
+function repoBlobMime(it, blob){
+  const t = String((blob && blob.type) || '').trim().toLowerCase();
+  if(t) return t;
+  const byExt = REPO_MIME_BY_EXT[String((it && it.ext) || '').toLowerCase()];
+  return byExt || REPO_KIND_MIME[repoFileKind(it)] || 'application/octet-stream';
+}
+// 打包导出时给文件起名用。原扩展名最准（存的时候就记下来了），
+// 其次看 MIME，都没有才按种类猜一个
+function repoFileExt(it, blob){
+  const raw = String((it && it.ext) || '').toLowerCase();
+  if(raw) return raw;
+  const byMime = REPO_EXT_BY_MIME[String((blob && blob.type) || '').trim().toLowerCase()];
+  return byMime || REPO_KIND_EXT[repoFileKind(it)] || '';
+}
 // 混着放之后「张」就不对了。整批都是图才说张，掺了字体铃声就说项
 function repoUnit(list){ return (list||[]).every(repoIsImage) ? '张' : '项'; }
 // 种类图标。文件夹角标用它 —— 一眼看出这一组是头像还是头像框，
@@ -3698,7 +3731,7 @@ async function repoAdd(rows){
     if(r.url) seen.add(key);
     fresh.push(Object.assign({
       id: uid()+Date.now().toString(36), source:'mine', type:'emoji', url:'', desc:'', folder:'', pack:'', origin:'',
-      preview:'', previewSize:0, previewLangs:[],
+      preview:'', previewSize:0, previewLangs:[], ext:'',
       hasBlob:false, addedAt: Date.now(), fromTitle:'', fromAuthor:'', fromCategory:'', fromTags:[],
     }, r));
   }
@@ -4663,10 +4696,16 @@ function openRepoAddSheet(){
       // 本机文件不设上限 —— 占的是用户自己的磁盘，我没有资格替他省。
       // 真存不下的时候 IndexedDB 会抛，下面那句照实告诉他
       if(!repoLocalFileOk(f, kind)){ skipped++; continue; }
-      const added = await repoAdd([{ source:'mine', type:addType, url:'',
+      // 扩展名单独记一栏。之前只留了去掉后缀的文件名，等到要把文件导出去的
+      // 时候就没人知道这坨二进制该叫 .ttf 还是 .otf 了
+      const ext = (f.name.match(/\.[^.]+$/) || [''])[0].toLowerCase();
+      const added = await repoAdd([{ source:'mine', type:addType, url:'', ext,
         desc: f.name.replace(/\.[^.]+$/,'').slice(0,20), folder:addFolder, pack:addPack, origin:originVal }]);
       if(!added.length) continue;
-      try{ await repoPutBlob(added[0].id, f); n++; }
+      // 存之前把 MIME 补正，别把一个空 type 的音频原样丢进去 —— 取出来做
+      // objectURL 的时候 <audio> 认不出格式
+      const body = f.type ? f : new Blob([f], { type: repoBlobMime(added[0], f) });
+      try{ await repoPutBlob(added[0].id, body); n++; }
       catch(err){ showToast('保存失败，浏览器存储空间可能已满'); break; }
     }
     e.target.value = '';
@@ -4819,11 +4858,44 @@ async function openRepoItemSheet(it){
 }
 
 /* ---- 批量：导出 / 上传 / 删除 ---- */
+// 本机传进来的东西没有链接，导出一份链接清单等于什么也没给 ——
+// 一个 ttf 的价值就在文件本身。所以这一类直接打包文件
+async function repoExportFiles(list){
+  showToast('正在打包…');
+  try{
+    await ensureJSZip();
+    const zip = new JSZip();
+    const used = new Set();
+    let n = 0;
+    for(const it of list){
+      const blob = await repoGetBlob(it.id);
+      if(!blob) continue;
+      const base = safeFilename(it.desc || it.fromTitle || '未命名') || '未命名';
+      const ext = repoFileExt(it, blob);
+      let name = base + ext, i = 2;
+      while(used.has(name)){ name = `${base} (${i++})${ext}`; }   // 同名的加序号，别互相覆盖
+      used.add(name);
+      zip.file(name, blob);
+      n++;
+    }
+    if(!n){ showToast('选中的条目没有本地文件'); return; }
+    const out = await zip.generateAsync({ type:'blob', compression:'DEFLATE', compressionOptions:{ level:6 } });
+    downloadBlob(out, `我的仓库_${n}个文件.zip`);
+    showToast(`已打包 ${n} 个文件`);
+  }catch(e){
+    showToast('打包失败：'+(e && e.message ? e.message : '未知错误'));
+  }
+}
 function repoExportPicked(){
   const picked = repoSelectedItems();
   if(!picked.length){ showToast('请先选择内容'); return; }
   const withUrl = picked.filter(it=>(it.url||'').trim());
-  if(!withUrl.length){ showToast('选中的均为本地图片，没有可导出的链接'); return; }
+  const localFiles = picked.filter(it=>!(it.url||'').trim() && it.hasBlob);
+  if(!withUrl.length){
+    if(localFiles.length){ repoExportFiles(localFiles); return; }
+    showToast('选中的内容既没有链接，也没有本地文件');
+    return;
+  }
   $('repoSheetMask').classList.add('open');
   // 选中的这批里出现过的来源，汇总成一行放在正文前面 ——
   // 跟站内下载导出的「来源：…」是同一个写法
@@ -4835,7 +4907,9 @@ function repoExportPicked(){
     onClose: ()=>$('repoSheetMask').classList.remove('open'),
   });
   if(withUrl.length < picked.length){
-    showToast(`已跳过 ${picked.length-withUrl.length} 张无链接的本地图片`);
+    showToast(localFiles.length
+      ? `已跳过 ${localFiles.length} 个本地文件（没有链接）。单独选中它们，导出会直接打包文件`
+      : `已跳过 ${picked.length-withUrl.length} 项无链接的条目`);
   }
 }
 
@@ -4911,7 +4985,7 @@ async function buildBackupZip(){
   for(const it of withBlob){
     const blob = await repoGetBlob(it.id);
     if(!blob) continue;
-    blobTypes[it.id] = blob.type || 'image/png';
+    blobTypes[it.id] = repoBlobMime(it, blob);
     zip.file(`blobs/${it.id}`, blob);
   }
   zip.file('items.json',   JSON.stringify(repoItems));
@@ -5110,7 +5184,7 @@ async function cloudPutHelpers(cfg, manifest){
     '3. 把 `manifest.json` 和所有 `chunk-*.bin` 一起拖进去',
     '4. 点「拼合并下载 zip」',
     '',
-    '拿到的 zip 用任何解压软件都能打开：`items.json` 是所有表情的记录（描述、链接、分类都在里面），`blobs/` 里是缓存过的图片原件，文件名对应 `items.json` 里的 id。',
+    '拿到的 zip 用任何解压软件都能打开：`items.json` 是所有条目的记录（类型、描述、链接、分类都在里面），`blobs/` 里是缓存过的原件（表情、头像、字体文件、铃声都在这儿），文件名对应 `items.json` 里的 id，真实格式看 `manifest.json` 的 `blobTypes`。',
     '',
     '## 命令行的拼法',
     '',
@@ -5472,15 +5546,15 @@ async function repoImportBackup(file){
       if(!f){ await repoUpdate(it.id, { hasBlob:false }); continue; }
       try{
         const raw = await f.async('blob');
-        await repoPutBlob(it.id, new Blob([raw], { type:(manifest.blobTypes||{})[it.id] || 'image/png' }));
+        await repoPutBlob(it.id, new Blob([raw], { type:(manifest.blobTypes||{})[it.id] || repoBlobMime(it, null) }));
         blobDone++;
       }catch(e){
         await repoUpdate(it.id, { hasBlob:false });
-        showToast('浏览器存储空间不足，部分图片未能导入');
+        showToast('浏览器存储空间不足，部分文件未能导入');
         break;
       }
     }
-    showToast(fresh.length ? `已导入 ${fresh.length} 张${blobDone?`（含 ${blobDone} 张图片）`:''}` : '备份中的内容仓库已全部存在');
+    showToast(fresh.length ? `已导入 ${fresh.length} ${repoUnit(fresh)}${blobDone?`（含 ${blobDone} 个文件）`:''}` : '备份中的内容仓库已全部存在');
     renderRepo();
   }catch(e){
     showToast('导入失败：'+(e && e.message ? e.message : '无法读取该文件'));
