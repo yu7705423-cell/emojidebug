@@ -18,7 +18,7 @@ const NAME = 'yoww';
 // 每次改动都往上加一。线上到底跑的是不是最新的，
 // 打开 /health 看这个数字就知道 —— Cloudflare 后台显示的是它自己的版本号，
 // 跟提交号对不上，别拿那个判断。
-const VERSION = '21';
+const VERSION = '22';
 const SITE = 'https://yoww2026.cn';
 
 // 我们支持的协议版本，新的排前面。客户端报的版本认识就照它的来，
@@ -1050,6 +1050,497 @@ function genProbe(path, cors) {
   return null;
 }
 
+/* ---------------- 油猴脚本 ----------------
+   跟 MCP、跟绘图并排的第三条路，面向的是"前端有自己的表情列表"那一类。
+   那份列表才是 AI 真正能用的东西：前端把它塞进提示词，模型挑名字，
+   前端按名字渲染。往那份列表里导，等于让 char 原生就会发这些表情 ——
+   不调工具、不出图、也不会因为一次几十张图把前端拖超时。
+
+   跟另外两条路最大的不同是**只给点赞过的**。站上本来就是「点赞后可下载」，
+   这个脚本要是能搜全站，等于开了个绕过点赞的后门。想搜全站的去接 MCP，
+   那条路一直开着 —— 门槛在"要会配 MCP"，不在"我们不给"。
+
+   脚本正文用 String.raw 原样嵌进来：里面有 \n 这种转义，普通模板字符串
+   会把它当换行吃掉，吐出去的脚本就成了语法错误。地址留了个占位符，
+   下发时替换成当前 origin，本地 wrangler dev 才指得回自己。 */
+function userScript(origin) {
+  return String.raw`// ==UserScript==
+// @name         Yoww 表情包
+// @namespace    https://yoww2026.cn/
+// @version      1.0.0
+// @description  在任何 AI 聊天前端里，直接用你在 Yoww 点赞过的表情包：单张插入，或把整批导进前端自己的表情列表
+// @author       Yoww
+// @match        *://*/*
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_xmlhttpRequest
+// @connect      mcp.yoww2026.cn
+// @run-at       document-idle
+// @noframes
+// ==/UserScript==
+
+/* 这个脚本只做一件事：把「你点赞过的表情包」搬到你正在用的聊天页面里。
+
+   为什么值得单独做一个脚本，而不是全指望 MCP：
+   前端自己的那份表情列表，才是 AI 真正能用的东西 —— 它会把这份列表塞进
+   提示词，AI 挑名字，前端按名字渲染。往那份列表里导，等于让 char 原生
+   就会发这些表情，不用调任何工具，也不会因为一次返回几十张图而超时。
+
+   为什么只给点赞过的：站上本来就是「点赞后可下载」。脚本要是能搜全站，
+   等于开了个绕过点赞的后门，发包的人白干。所以这里能看到什么，跟你在
+   站上能下载什么，是同一条线。真想搜全站的，去接 MCP —— 那条路一直开着。
+
+   没装 Tampermonkey 也能跑：GM_* 不在就退回普通 fetch 和 localStorage。
+   这不是为了将就，是为了能在普通浏览器里把整个流程测一遍。 */
+
+(function () {
+  'use strict';
+
+  var API = '__YOWW_API__';   // 下发时由服务端替换成它自己的地址
+  var NS = 'yoww:';
+
+  // ---------- 存取：有油猴用油猴的，没有就用 localStorage ----------
+  function getv(k, d) {
+    try {
+      if (typeof GM_getValue === 'function') return GM_getValue(k, d);
+      var raw = localStorage.getItem(NS + k);
+      return raw === null ? d : JSON.parse(raw);
+    } catch (e) { return d; }
+  }
+  function setv(k, v) {
+    try {
+      if (typeof GM_setValue === 'function') { GM_setValue(k, v); return; }
+      localStorage.setItem(NS + k, JSON.stringify(v));
+    } catch (e) { /* 无痕模式之类，存不了就算了，不能因此崩掉 */ }
+  }
+
+  // ---------- 请求：油猴的 xhr 能跨域，没有就用 fetch（服务端回了 CORS） ----------
+  function ask(path, body) {
+    var url = API + path;
+    return new Promise(function (resolve, reject) {
+      if (typeof GM_xmlhttpRequest === 'function') {
+        GM_xmlhttpRequest({
+          method: 'POST', url: url,
+          headers: { 'content-type': 'application/json' },
+          data: JSON.stringify(body),
+          timeout: 20000,
+          onload: function (r) {
+            try { resolve(JSON.parse(r.responseText)); }
+            catch (e) { reject(new Error('服务器返回了看不懂的内容')); }
+          },
+          onerror: function () { reject(new Error('连不上 Yoww')); },
+          ontimeout: function () { reject(new Error('等太久了，网络可能不通')); },
+        });
+        return;
+      }
+      fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      }).then(function (r) { return r.json(); }).then(resolve).catch(function () {
+        reject(new Error('连不上 Yoww'));
+      });
+    });
+  }
+
+  // ---------- 找输入框 ----------
+  /* 哪个框才是"聊天输入框"没有统一答案，各家 DOM 千奇百怪。
+     与其猜，不如记住你最后点过的那个可输入的地方 —— 你要往哪儿插，
+     你自己刚点过。这比任何选择器都准。 */
+  var lastBox = null;
+  function editable(el) {
+    if (!el || el.nodeType !== 1) return false;
+    if (el.isContentEditable) return true;
+    var t = el.tagName;
+    if (t === 'TEXTAREA') return true;
+    if (t === 'INPUT') {
+      var ty = (el.getAttribute('type') || 'text').toLowerCase();
+      return ty === 'text' || ty === 'search' || ty === '';
+    }
+    return false;
+  }
+  document.addEventListener('focusin', function (e) {
+    if (editable(e.target) && !inPanel(e.target)) lastBox = e.target;
+  }, true);
+
+  /* 往框里塞字，最容易翻车的一步。
+     直接改 .value 在 React / Vue 那套受控组件里是没用的 —— 框里看着变了，
+     它内部的状态没变，你一发送，发出去的还是原来的空字符串。
+     所以要用原型上的 setter 绕过框架的劫持，再手动派发一个 input 事件，
+     让框架以为是人敲的。contenteditable 那类走 execCommand，同理。 */
+  function insertText(el, text) {
+    if (!el) return false;
+    el.focus();
+    if (el.isContentEditable) {
+      var okc = false;
+      try { okc = document.execCommand('insertText', false, text); } catch (e) { okc = false; }
+      if (!okc) {
+        el.textContent = (el.textContent || '') + text;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      return true;
+    }
+    var proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    var desc = Object.getOwnPropertyDescriptor(proto, 'value');
+    var start = el.selectionStart, end = el.selectionEnd;
+    var cur = el.value || '';
+    var next = (start === null || start === undefined)
+      ? cur + text
+      : cur.slice(0, start) + text + cur.slice(end);
+    if (desc && desc.set) desc.set.call(el, next); else el.value = next;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    try {
+      var pos = (start === null || start === undefined ? next.length : start + text.length);
+      el.setSelectionRange(pos, pos);
+    } catch (e) { /* number 之类的框不支持，无所谓 */ }
+    return true;
+  }
+
+  // ---------- 导出写法 ----------
+  /* 各家前端的表情列表格式不一样，所以给几种常见的让你挑。
+     挑错了不会有任何报错，只会导进去一堆没人认的字符串 —— 所以面板里
+     一直带着一行预览，导之前先看一眼长什么样。 */
+  var FORMATS = [
+    { key: 'pipe',  label: '名称|链接',      line: function (e) { return e.desc + '|' + e.url; } },
+    { key: 'space', label: '名称 链接',      line: function (e) { return e.desc + ' ' + e.url; } },
+    { key: 'md',    label: 'Markdown 图片',  line: function (e) { return '![' + e.desc + '](' + e.url + ')'; } },
+    { key: 'url',   label: '只要链接',       line: function (e) { return e.url; } },
+    { key: 'json',  label: 'JSON 数组',      whole: function (list) {
+        return JSON.stringify(list.map(function (e) { return { name: e.desc, url: e.url }; }), null, 2); } },
+  ];
+  function fmtOf(key) {
+    for (var i = 0; i < FORMATS.length; i++) if (FORMATS[i].key === key) return FORMATS[i];
+    return FORMATS[0];
+  }
+  function build(list, key) {
+    var f = fmtOf(key);
+    if (f.whole) return f.whole(list);
+    return list.map(f.line).join('\n');
+  }
+
+  // ---------- 面板 ----------
+  /* 整个界面塞进 shadow DOM。宿主页面的 CSS 什么都干得出来 ——
+     一条 img{width:100%} 就能让缩略图铺满半个屏幕。隔开最省事。 */
+  var host = null, root = null, state = {
+    packs: [], picked: {}, emojis: [], loading: false, note: '',
+    q: '', open: false, view: 'grid',
+  };
+  function inPanel(el) { return !!(host && (el === host || host.contains(el))); }
+
+  function css() {
+    return '' +
+    ':host{all:initial}' +
+    // all:initial 把 box-sizing 也一起重置回 content-box 了，
+    // 于是 width:340 的面板实际占 366（加内边距和边框），窄屏直接顶出屏幕左边
+    '*,*::before,*::after{box-sizing:border-box}' +
+    '.wrap{position:fixed;right:18px;bottom:18px;z-index:2147483000;' +
+      'font:13px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;color:#1b1b1f}' +
+    '.fab{width:42px;height:42px;border-radius:50%;border:none;cursor:pointer;font-size:20px;' +
+      'background:#3b6ef5;color:#fff;box-shadow:0 3px 12px rgba(0,0,0,.28);display:block}' +
+    '.box{position:absolute;right:0;bottom:52px;width:340px;max-width:calc(100vw - 36px);' +
+      'max-height:min(520px,calc(100vh - 110px));overflow:auto;background:#fbfaf8;' +
+      'border:1px solid #e6e1d9;border-radius:14px;box-shadow:0 8px 28px rgba(0,0,0,.2);padding:12px}' +
+    '.row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}' +
+    '.row+.row{margin-top:8px}' +
+    'input,select{flex:1;min-width:0;box-sizing:border-box;padding:7px 9px;font:inherit;' +
+      'border:1px solid #ddd8d0;border-radius:8px;background:#fff;color:inherit}' +
+    'button.b{padding:7px 12px;font:inherit;border:none;border-radius:8px;background:#3b6ef5;color:#fff;cursor:pointer}' +
+    'button.o{padding:6px 10px;font:inherit;border:1px solid #ddd8d0;border-radius:8px;background:#fff;color:inherit;cursor:pointer}' +
+    'button.b:disabled,button.o:disabled{opacity:.5;cursor:default}' +
+    '.hint{color:#8a8681;font-size:12px;margin:6px 0 0}' +
+    '.bad{color:#c0392b}' +
+    '.packs{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}' +
+    '.chip{padding:4px 9px;border-radius:999px;border:1px solid #ddd8d0;background:#fff;cursor:pointer;font-size:12px}' +
+    '.chip.on{background:#3b6ef5;border-color:#3b6ef5;color:#fff}' +
+    '.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:10px}' +
+    '.cell{border:none;background:none;padding:0;cursor:pointer}' +
+    '.cell img{width:100%;aspect-ratio:1;object-fit:contain;border-radius:8px;' +
+      'background:#f3f0ea;border:1px solid #e6e1d9;display:block}' +
+    '.cell span{display:block;font-size:10px;color:#8a8681;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
+    'textarea{width:100%;box-sizing:border-box;height:120px;margin-top:8px;padding:8px;' +
+      'font:11px/1.5 ui-monospace,Menlo,monospace;border:1px solid #ddd8d0;border-radius:8px;background:#fff;color:inherit}' +
+    '.head{display:flex;justify-content:space-between;align-items:center}' +
+    '.head b{font-size:14px}' +
+    '.x{border:none;background:none;font-size:18px;cursor:pointer;color:#8a8681;line-height:1}';
+  }
+
+  function el(tag, attrs, kids) {
+    var n = document.createElement(tag);
+    if (attrs) Object.keys(attrs).forEach(function (k) {
+      if (k === 'text') n.textContent = attrs[k];
+      else if (k.slice(0, 2) === 'on') n.addEventListener(k.slice(2), attrs[k]);
+      else n.setAttribute(k, attrs[k]);
+    });
+    (kids || []).forEach(function (c) { if (c) n.appendChild(c); });
+    return n;
+  }
+
+  function mount() {
+    if (host) return;
+    host = document.createElement('div');
+    host.id = 'yoww-emoji-host';
+    root = host.attachShadow({ mode: 'open' });
+    root.appendChild(el('style', { text: css() }));
+    root.appendChild(el('div', { class: 'wrap' }, [
+      el('button', { class: 'fab', title: 'Yoww 表情包', onclick: toggle, text: '🐱' }),
+    ]));
+    document.documentElement.appendChild(host);
+  }
+
+  function toggle() {
+    state.open = !state.open;
+    draw();
+    if (state.open && !state.packs.length) loadPacks();
+  }
+
+  function draw() {
+    var wrap = root.querySelector('.wrap');
+    var old = root.querySelector('.box');
+    if (old) old.remove();
+    if (!state.open) return;
+
+    var tok = getv('token', '');
+    var box = el('div', { class: 'box' });
+
+    box.appendChild(el('div', { class: 'head' }, [
+      el('b', { text: 'Yoww 表情包' }),
+      el('button', { class: 'x', text: '×', onclick: toggle }),
+    ]));
+
+    // 没填令牌：先只给填令牌这一件事，别把一堆空界面摆在人脸上
+    if (!tok) {
+      var inp = el('input', { placeholder: '把令牌粘进来（yoww_ 开头）', value: '' });
+      box.appendChild(el('div', { class: 'row' }, [inp]));
+      box.appendChild(el('div', { class: 'row' }, [
+        el('button', { class: 'b', text: '保存', onclick: function () {
+          var v = (inp.value || '').trim();
+          if (!v) return;
+          setv('token', v); fresh();          // 作废上一个令牌还在路上的请求
+          state.packs = []; state.emojis = []; state.note = ''; state.loading = false;
+          draw(); loadPacks();
+        } }),
+      ]));
+      box.appendChild(el('p', { class: 'hint', text:
+        '令牌在 yoww2026.cn 的「我的 → MCP 接口」里生成，跟接 MCP 用的是同一个。' +
+        '这里只会出现你点赞过的表情包。' }));
+      wrap.appendChild(box);
+      return;
+    }
+
+    // 搜索 + 刷新
+    var q = el('input', { placeholder: '在我点赞的包里搜（留空是全部）', value: state.q });
+    q.addEventListener('keydown', function (e) { if (e.key === 'Enter') { state.q = q.value; loadEmojis(); } });
+    box.appendChild(el('div', { class: 'row' }, [
+      q,
+      el('button', { class: 'o', text: '搜', onclick: function () { state.q = q.value; loadEmojis(); } }),
+    ]));
+
+    // 点赞过的包，当筛选用
+    if (state.packs.length) {
+      var chips = el('div', { class: 'packs' });
+      chips.appendChild(el('button', {
+        class: 'chip' + (allPicked() ? ' on' : ''), text: '全部',
+        onclick: function () { state.picked = {}; loadEmojis(); },
+      }));
+      state.packs.forEach(function (p) {
+        chips.appendChild(el('button', {
+          class: 'chip' + (state.picked[p.id] ? ' on' : ''),
+          text: p.title + ' · ' + p.emoji_count,
+          onclick: function () {
+            if (state.picked[p.id]) delete state.picked[p.id]; else state.picked[p.id] = 1;
+            loadEmojis();
+          },
+        }));
+      });
+      box.appendChild(chips);
+    }
+
+    if (state.loading) box.appendChild(el('p', { class: 'hint', text: '加载中…' }));
+    if (state.note) box.appendChild(el('p', { class: 'hint' + (state.noteBad ? ' bad' : ''), text: state.note }));
+
+    if (state.view === 'grid') {
+      var grid = el('div', { class: 'grid' });
+      state.emojis.slice(0, 60).forEach(function (e) {
+        var img = el('img', { src: e.url, alt: '', loading: 'lazy' });
+        var cap = el('span', { text: e.desc || '' });
+        grid.appendChild(el('button', {
+          class: 'cell', title: e.desc || '',
+          onclick: function () { pickOne(e); },
+        }, [img, cap]));
+      });
+      box.appendChild(grid);
+    }
+
+    // 一次性导入
+    var sel = el('select');
+    FORMATS.forEach(function (f) {
+      var o = el('option', { value: f.key, text: f.label });
+      if (f.key === getv('fmt', 'pipe')) o.setAttribute('selected', 'selected');
+      sel.appendChild(o);
+    });
+    sel.addEventListener('change', function () { setv('fmt', sel.value); draw(); });
+
+    box.appendChild(el('div', { class: 'row' }, [
+      sel,
+      el('button', {
+        class: 'b', text: '一次性导入',
+        onclick: function () { importAll(); },
+      }),
+    ]));
+    box.appendChild(el('p', { class: 'hint', text:
+      '「一次性导入」会把上面这些图按选中的写法，一股脑填进你最后点过的那个输入框 —— ' +
+      '通常就是前端「添加表情」的那个大框。没点过框就复制到剪贴板。' }));
+
+    box.appendChild(el('div', { class: 'row' }, [
+      el('button', { class: 'o', text: '换令牌', onclick: function () {
+        setv('token', ''); fresh();
+        state.packs = []; state.emojis = []; state.note = ''; state.loading = false; draw();
+      } }),
+      el('button', { class: 'o', text: '刷新', onclick: function () { state.packs = []; loadPacks(); } }),
+    ]));
+
+    wrap.appendChild(box);
+  }
+
+  function allPicked() { return Object.keys(state.picked).length === 0; }
+
+  /* 每次发请求领一个号，回来时号对不上就直接丢掉。
+
+     不加这个会出真事：换令牌的时候，上一个令牌的请求还在路上，
+     它晚一步回来就把新的结果盖掉 —— 最难看的一种是令牌已经失效了，
+     旧请求的"我的库里 8 张"却把错误提示顶掉，用户以为一切正常，
+     实际上什么都用不了。连着点几个包筛选也是同样的毛病。 */
+  var seq = 0;
+  function fresh() { return ++seq; }
+  function stale(my) { return my !== seq; }
+
+  function say(msg, bad) { state.note = msg; state.noteBad = !!bad; draw(); }
+
+  function loadPacks() {
+    var tok = getv('token', '');
+    if (!tok) return;
+    var my = fresh();
+    state.loading = true; draw();
+    ask('/s/packs', { key: tok }).then(function (r) {
+      if (stale(my)) return;
+      state.loading = false;
+      if (!r || !r.ok) { say((r && r.error) || '拿不到你点赞的包', true); return; }
+      state.packs = r.packs || [];
+      if (!state.packs.length) {
+        say('你还没点赞过任何表情包。去 yoww2026.cn 点几个赞，这里就有了。', true);
+        state.emojis = []; draw(); return;
+      }
+      state.note = ''; loadEmojis();
+    }).catch(function (e) { if (stale(my)) return; state.loading = false; say(e.message, true); });
+  }
+
+  function loadEmojis() {
+    var tok = getv('token', '');
+    if (!tok) return;
+    var my = fresh();
+    state.loading = true; draw();
+    var ids = Object.keys(state.picked);
+    ask('/s/emojis', { key: tok, ids: ids.length ? ids : null, q: state.q || '', limit: 300 })
+      .then(function (r) {
+        if (stale(my)) return;
+        state.loading = false;
+        if (!r || !r.ok) { say((r && r.error) || '拿不到表情', true); return; }
+        state.emojis = r.emojis || [];
+        var msg = '我的库里 ' + (r.total || 0) + ' 张';
+        if (state.q && r.unliked_packs) {
+          msg += '。站里还有 ' + r.unliked_packs + ' 个包也有「' + state.q + '」，去点个赞就能用。';
+        }
+        say(msg, false);
+      }).catch(function (e) { if (stale(my)) return; state.loading = false; say(e.message, true); });
+  }
+
+  function pickOne(e) {
+    // 单张插入一律按图片写法走，不跟着"导入写法"变 ——
+    // 这是你自己要发的一条消息，你自己发的消息前端是按 Markdown 渲染的
+    var text = '![' + (e.desc || '表情') + '](' + e.url + ')';
+    if (lastBox && insertText(lastBox, text)) { say('插好了', false); return; }
+    copy(text, '没找到输入框，已复制到剪贴板');
+  }
+
+  function importAll() {
+    if (!state.emojis.length) { say('没有可导入的图', true); return; }
+    var text = build(state.emojis, getv('fmt', 'pipe'));
+    if (lastBox && insertText(lastBox, text)) {
+      say('已填进你最后点过的那个框，共 ' + state.emojis.length + ' 张', false);
+      return;
+    }
+    copy(text, '没点过输入框，' + state.emojis.length + ' 张已复制到剪贴板');
+  }
+
+  function copy(text, msg) {
+    try {
+      navigator.clipboard.writeText(text).then(
+        function () { say(msg, false); },
+        function () { fallbackCopy(text, msg); });
+    } catch (e) { fallbackCopy(text, msg); }
+  }
+  function fallbackCopy(text, msg) {
+    // 有些页面禁了剪贴板权限。退回老办法：临时塞一个 textarea 再 execCommand
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.left = '-9999px';
+      document.body.appendChild(ta); ta.select();
+      document.execCommand('copy'); ta.remove();
+      say(msg, false);
+    } catch (e2) { say('复制不了，手动选一下吧', true); }
+  }
+
+  // 有些页面是先渲染一片空白再挂内容的，等一会儿再挂按钮
+  if (document.body) mount();
+  else document.addEventListener('DOMContentLoaded', mount);
+
+  // 给测试用的把手。生产环境里没人会去碰它，但没有它就只能靠点坐标去测
+  window.__yoww = {
+    state: state, insertText: insertText, build: build, FORMATS: FORMATS,
+    mount: mount, toggle: toggle, get box() { return root && root.querySelector('.box'); },
+    get root() { return root; },
+    setToken: function (t) { setv('token', t); },
+  };
+})();
+`.replace('__YOWW_API__', origin.replace(/^http:/, 'https:'));
+}
+
+// uuid 长什么样是定死的。不先筛一遍就往数据库送，一个手写的烂 id
+// 就能让整条查询报错 —— 报错信息还会原样漏回给调用方
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+async function scriptApi(env, req, url, path, cors, ctx) {
+  let body = {};
+  if (req.method === 'POST') { try { body = await req.json(); } catch (e) { body = {}; } }
+  const token = readToken(req, url) || String(body.key || '').trim();
+  if (!token) {
+    return json({ ok: false, error: '还没填令牌。在脚本面板里粘一个 yoww_ 开头的令牌。' }, 401, {}, cors);
+  }
+
+  if (path.endsWith('/packs')) {
+    const r = await rpc(env, 'mcp_liked_packs', { p_token: token, p_limit: 200 });
+    if (!r.ok) return json({ ok: false, error: authText(r) }, 200, {}, cors);
+    return json(r, 200, {}, cors);
+  }
+
+  if (path.endsWith('/emojis')) {
+    const ids = Array.isArray(body.ids) ? body.ids.filter(x => UUID_RE.test(String(x))) : [];
+    const r = await rpc(env, 'mcp_liked_emojis', {
+      p_token: token,
+      p_ids: ids.length ? ids : null,
+      p_query: String(body.q == null ? '' : body.q).trim(),
+      p_limit: Math.min(Math.max(parseInt(body.limit, 10) || 300, 1), 500),
+      p_offset: Math.max(parseInt(body.offset, 10) || 0, 0),
+    });
+    if (!r.ok) return json({ ok: false, error: authText(r) }, 200, {}, cors);
+    // 图一律走中转：脚本跑在别人的页面上，第三方图床的防盗链和 CORS 都指望不上
+    const list = await withProxy(env, r.emojis, url.origin, ctx);
+    return json(Object.assign({}, r, { emojis: list }), 200, {}, cors);
+  }
+
+  return json({ ok: false, error: '没有这个接口' }, 404, {}, cors);
+}
+
 /* ---------------- 令牌从哪来 ----------------
    两种都认：
    · Authorization: Bearer yoww_xxx  —— 更稳妥，令牌不会进浏览器历史和访问日志
@@ -1121,13 +1612,31 @@ export default {
     const isMcp = first === 'mcp' || first === 'sse';
 
     if (!isMcp) {
+      // 脚本本体。后缀必须是 .user.js，油猴才会弹安装框；
+      // 类型给 text/javascript，不然有些浏览器直接当文件下载
+      if (url.pathname === '/yoww.user.js') {
+        return new Response(userScript(url.origin), {
+          status: 200,
+          headers: Object.assign({
+            'content-type': 'text/javascript; charset=utf-8',
+            'cache-control': 'public, max-age=300',
+          }, cors),
+        });
+      }
+      if (first === 's') return scriptApi(env, req, url, url.pathname, cors, ctx);
       if (url.pathname === '/health') {
         return json({ ok: true, name: NAME, version: VERSION,
           // 有哪些功能，一眼看得出跑的是哪一版
-          has: ['selftest', 'list', 'format_page', 'custom_tpl', 'token_format', 'token_scopes', 'avatars', 'load_emoji_set', 'img_proxy', 'image_gen'],
+          has: ['selftest', 'list', 'format_page', 'custom_tpl', 'token_format', 'token_scopes', 'avatars', 'load_emoji_set', 'img_proxy', 'image_gen', 'userscript'],
           // 装成绘图接口的那几条路径，前端认哪条填哪条
           image_api: ['/v1/images/generations', '/sdapi/v1/txt2img', '/gen?prompt='],
           tools: TOOLS.map(t => t.name) }, 200, {}, cors);
+      }
+      if (url.pathname === '/script') {
+        return new Response(scriptPage(), {
+          status: 200,
+          headers: Object.assign({ 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }, cors),
+        });
       }
       if (url.pathname === '/format') {
         return new Response(formatPage(), {
@@ -1326,6 +1835,65 @@ $('go').addEventListener('click', async ()=>{
   finally{ $('go').disabled=false; }
 });
 </script>
+</html>`;
+}
+
+/* ---------------- 脚本安装页 ----------------
+   装浏览器脚本这件事，卡人的从来不是技术，是"我到底该点哪儿"。
+   所以这页只讲三步，每步一句话，不解释原理 —— 想看原理的往下翻。 */
+function scriptPage() {
+  return `<!doctype html><html lang="zh-CN"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Yoww 浏览器脚本</title>
+<style>
+ :root{color-scheme:light dark}
+ body{margin:0;padding:24px 16px;max-width:680px;margin-inline:auto;
+      font:15px/1.75 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+      color:#1b1b1f;background:#fbfaf8}
+ @media (prefers-color-scheme:dark){body{color:#e8e6e3;background:#17171a} pre{background:#26262b!important;border-color:#3a3a42!important}}
+ h1{font-size:21px;margin:0 0 4px} h2{font-size:16px;margin:26px 0 6px}
+ .m{color:#8a8681;font-size:13px;margin:0 0 20px}
+ a.go{display:inline-block;margin:10px 0;padding:11px 20px;border-radius:10px;
+      background:#3b6ef5;color:#fff;text-decoration:none;font-size:15px}
+ ol{padding-left:20px} li{margin:6px 0}
+ pre{white-space:pre-wrap;word-break:break-all;font-size:12px;margin:6px 0;
+     padding:9px;border-radius:8px;background:#f3f0ea;border:1px solid #e6e1d9}
+ .note{border-left:3px solid #e6e1d9;padding-left:12px;color:#8a8681;font-size:13px}
+</style>
+<h1>Yoww 浏览器脚本</h1>
+<p class="m">在任何 AI 聊天网页里，直接用你在 Yoww 点赞过的表情包。</p>
+
+<h2>装它</h2>
+<ol>
+<li>浏览器先装 <b>Tampermonkey</b>（油猴）扩展，商店里搜得到。</li>
+<li>点下面这个按钮，油猴会弹出安装框，点「安装」。</li>
+<li>随便打开一个 AI 聊天网页，右下角会出现一个 🐱。点开，把令牌粘进去。</li>
+</ol>
+<a class="go" href="/yoww.user.js">安装脚本</a>
+<p class="note">令牌在 <a href="${SITE}">yoww2026.cn</a> 的「我的 → MCP 接口」里生成，跟接 MCP 用的是同一个，不用另外办。</p>
+
+<h2>它能干什么</h2>
+<ul>
+<li><b>单张插入</b>：点一张图，就把它写进你正在打字的那个框。你自己发的消息，前端是按 Markdown 渲染的，所以图会正常显示。</li>
+<li><b>一次性导入</b>：把你点赞过的所有表情，按你选的写法一股脑填进前端「添加表情」的那个框。
+导进去之后，<b>AI 就原生会发这些表情了</b> —— 前端会把它自己那份表情列表塞进提示词，模型挑名字，前端按名字渲染。
+不调任何工具，也不会因为一次几十张图把前端拖超时。</li>
+</ul>
+
+<h2>为什么只有点赞过的</h2>
+<p>站上本来就是「点赞后可下载」。脚本要是能搜全站，等于开了个绕过点赞的后门，
+发包的人白干。所以这里能看到什么，跟你在站上能下载什么，是同一条线。</p>
+<p>搜到一半发现想要的包没点过赞，脚本会直接告诉你「站里还有 N 个包也有这个词」，
+回站里点个赞，刷新一下就有了。</p>
+<p class="note">想搜全站的，去接 <a href="/">MCP</a> —— 那条路一直开着，门槛在"要会配 MCP"，不在"我们不给"。</p>
+
+<h2>装不上 / 不出现按钮</h2>
+<ul>
+<li>右下角没有 🐱：油猴里看看这个脚本是不是被停用了，或者当前网站被排除了。</li>
+<li>点了图但框里没反应：先在聊天框里点一下（让它获得过焦点），再点图。脚本插的是你<b>最后点过</b>的那个框。</li>
+<li>图是裂的：说明图片中转没通，打开 <a href="/selftest">/selftest</a> 跑一遍，第 5 步会直接告诉你。</li>
+</ul>
 </html>`;
 }
 

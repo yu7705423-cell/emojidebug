@@ -5377,6 +5377,13 @@ async function openMcpSheet(){
       <p class="field-help">前端的绘图设置里有哪种就填哪种，密钥 / API Key 填<b>同一个令牌</b>。
         权限跟着令牌走，没勾头像就搜不到头像。</p>
 
+      <div class="field-label">浏览器脚本</div>
+      <p class="field-help">装一个油猴脚本，在任何 AI 聊天网页的右下角多一个按钮：
+        点一张图直接写进输入框，或者把你<b>点赞过的</b>表情一次性导进前端自己的表情列表 ——
+        导完 char 就原生会发了，不用调工具。</p>
+      ${copyRowHtml('安装地址', MCP_BASE + '/script', 'mcpScript')}
+      <p class="field-help">令牌还是这一个。脚本里只会出现你点赞过的包，跟站上「点赞后可下载」是同一条线。</p>
+
       <div class="field-label">我的令牌</div>
       <p class="field-help">一个前端配一个。能看什么、怎么出图都跟着令牌走，各自互不影响。</p>
       ${rows}
