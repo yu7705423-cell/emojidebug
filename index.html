@@ -7370,26 +7370,58 @@ $('afTryBackBtn').addEventListener('click', ()=>$('afTryOverlay').classList.remo
    教程和指路不走这里 —— 那两类正文本身就是内容，凑不成列表。 */
 // 三种类型共用同一个列表和同一个粘贴框，差别写在这张表里。
 // 不这样的话，字体这边就是第三份一模一样的解析和渲染代码。
+// cats 原来是个布尔，只有字体用得上，于是分类列表就写死在渲染里了。
+// 头像也要选分类，而且是另一套（普通/情侣），再加一个布尔就得在渲染处
+// 分叉判断"到底该画哪一套"。索性把列表本身放进来，没有分类的写 null。
 const BATCH_KINDS = {
-  ringtone:     { label:'铃声',   table:'posts', pick:false, perms:true,  cats:false,
+  ringtone:     { label:'铃声',   table:'posts', pick:false, perms:true,  cats:null,
                   urlHint:'https://…  mp3 / m4a 等直链',
                   help:'贴直链，不要贴网盘或播放页地址，否则试听放不出来。' },
-  avatar_frame: { label:'头像框', table:'posts', pick:true,  perms:true,  cats:false,
+  avatar_frame: { label:'头像框', table:'posts', pick:true,  perms:true,  cats:null,
+                  preview:'contain',
                   urlHint:'https://…  头像框图片链接',
                   help:'选图会自动压缩并转成链接，可以一次选多张，每张自动占一行，名字再补上就行。透明底的 PNG 效果最好。' },
-  font:         { label:'字体',   table:'fonts', pick:false, perms:false, cats:true,
+  avatar:       { label:'头像',   table:'posts', pick:true,  perms:true,  cats:AVATAR_CATEGORIES,
+                  preview:'cover',
+                  urlHint:'https://…  头像图片链接',
+                  help:'选图可以一次选很多张。选「情侣」的时候相邻两张自动配成一对，左边那张排前面；' +
+                       '中途换分类不用重来，已经填进去的图会按新分类重新分组。' },
+  font:         { label:'字体',   table:'fonts', pick:false, perms:false, cats:FONT_CATEGORIES,
                   urlHint:'https://…  ttf / otf / woff2 直链',
                   help:'先把名字和链接批量导进来，卡片的展示文案、语言样例、背景这些之后点进每个字体单独调。' },
 };
+
+/* 情侣和普通之间来回切的时候，把已经填好的图重新分组，而不是让人从头再来。
+   一对拆开就是两张单图，两张单图合起来就是一对 —— 顺序保持原样，
+   名字尽量跟着它那张图走。
+   不这么做的话：选了十张普通头像，想改成情侣，就得把十个链接手动挪位置。 */
+function regroupAvatarRows(st, toPair){
+  const items = [];
+  st.rows.forEach(r=>{
+    if((r.url||'').trim())  items.push({ url:r.url.trim(),  title:(r.title||'').trim() });
+    if((r.url2||'').trim()) items.push({ url:r.url2.trim(), title:'' });
+  });
+  const out = [];
+  if(toPair){
+    for(let i=0; i<items.length; i+=2){
+      const a = items[i], b = items[i+1];
+      out.push({ id: uid(), title: a.title || (b ? b.title : ''), url: a.url, url2: b ? b.url : '' });
+    }
+  }else{
+    items.forEach(it=> out.push({ id: uid(), title: it.title, url: it.url, url2: '' }));
+  }
+  if(!out.length) out.push({ id: uid(), title:'', url:'', url2:'' });   // 一行都没有的界面没法用
+  st.rows = out;
+}
 let batchPost = null;
 
 function openPostBatch(kind){
   batchPost = {
     kind,
-    rows: [{ id: uid(), title: '', url: '' }],
+    rows: [{ id: uid(), title: '', url: '', url2: '' }],
     pasteOpen: false, pasteText: '',
-    category: FONT_CATEGORIES[0],
-    tags: [], tagInput: '',
+    category: (BATCH_KINDS[kind].cats || [null])[0],
+    tags: [], tagInput: '', credit: '',
     allowRepost: false, allowEdit: false, otherChecked: false, otherText: '',
   };
   $('postEditorOverlay').classList.add('open');
@@ -7401,20 +7433,38 @@ function openPostBatch(kind){
 function syncPostBatch(){
   const st = batchPost; if(!st) return;
   st.rows.forEach(r=>{
-    const t = document.querySelector(`[data-bp-title="${r.id}"]`);
-    const u = document.querySelector(`[data-bp-url="${r.id}"]`);
+    const t  = document.querySelector(`[data-bp-title="${r.id}"]`);
+    const u  = document.querySelector(`[data-bp-url="${r.id}"]`);
+    const u2 = document.querySelector(`[data-bp-url2="${r.id}"]`);
     if(t) r.title = t.value;
     if(u) r.url = u.value;
+    if(u2) r.url2 = u2.value;
   });
   const ti = $('bpTagInput'); if(ti) st.tagInput = ti.value;
   const ot = $('bpOther');    if(ot) st.otherText = ot.value;
+  const cr = $('bpCredit');   if(cr) st.credit = cr.value;
   const pt = $('bpPaste');    if(pt) st.pasteText = pt.value;
+}
+
+/* 往列表里塞一张图。单张就是新起一行；情侣的话，先看上一对是不是
+   只填了左边 —— 是就补成右边，不是才开新的一对。
+   选图和批量粘贴两处都要这么填，写两遍迟早会不一致。 */
+function fillOneUrl(st, pair, url, title){
+  const last = st.rows[st.rows.length - 1];
+  if(pair && last && (last.url||'').trim() && !(last.url2||'').trim()){
+    last.url2 = url;
+    return;
+  }
+  st.rows.push({ id: uid(), title: title || '', url, url2: '' });
 }
 
 function drawPostBatch(){
   const st = batchPost; if(!st) return;
   const cfg = BATCH_KINDS[st.kind];
-  const isFrame = st.kind === 'avatar_frame';
+  // 情侣是一对两张，一行就得有两个链接框。其它类型永远是单张
+  const pair = st.kind === 'avatar' && isPairCat(st.category);
+  const thumb = u => `<img src="${esc(u)}" alt="" referrerpolicy="no-referrer"
+    style="width:52px; height:52px; object-fit:${cfg.preview}; background:var(--bg-elev); border-radius:var(--radius-s);">`;
   const suggestions = getAllKnownTags().filter(t=>!st.tags.includes(t)).slice(0, 20);
 
   $('postEditorTitle').textContent = `发布${cfg.label}`;
@@ -7425,11 +7475,14 @@ function drawPostBatch(){
       ${st.rows.map((r, i)=>`
         <div class="row-item">
           <div class="row-main">
-            <input class="desc" data-bp-title="${r.id}" placeholder="第 ${i+1} 条的名字" value="${esc(r.title)}" maxlength="60">
+            <input class="desc" data-bp-title="${r.id}" placeholder="第 ${i+1} ${pair?'对':'条'}的名字" value="${esc(r.title)}" maxlength="60">
             <input class="url" data-bp-url="${r.id}"
-              placeholder="${esc(cfg.urlHint)}" value="${esc(r.url)}">
-            ${r.url.trim() && isFrame ? `<img src="${esc(r.url.trim())}" alt="" referrerpolicy="no-referrer"
-              style="width:52px; height:52px; object-fit:contain; margin-top:6px; background:var(--bg-elev); border-radius:var(--radius-s);">` : ''}
+              placeholder="${pair ? '左边那张' : esc(cfg.urlHint)}" value="${esc(r.url)}">
+            ${pair ? `<input class="url" data-bp-url2="${r.id}" style="margin-top:6px;"
+              placeholder="右边那张" value="${esc(r.url2 || '')}">` : ''}
+            ${cfg.preview && (r.url.trim() || (r.url2||'').trim()) ? `<div style="display:flex; gap:6px; margin-top:6px;">
+              ${r.url.trim() ? thumb(r.url.trim()) : ''}${pair && (r.url2||'').trim() ? thumb(r.url2.trim()) : ''}
+            </div>` : ''}
           </div>
           <button class="row-act-sm" data-bp-del="${r.id}">删除</button>
         </div>`).join('')}
@@ -7452,8 +7505,9 @@ function drawPostBatch(){
     ${cfg.cats ? `
     <div class="field-label">分类（这一批都用同一个）</div>
     <div class="chip-row" id="bpCatRow">
-      ${FONT_CATEGORIES.map(c=>`<button type="button" class="chip${st.category===c?' active':''}" data-bp-cat="${esc(c)}">${esc(c)}</button>`).join('')}
-    </div>` : ''}
+      ${cfg.cats.map(c=>`<button type="button" class="chip${st.category===c?' active':''}" data-bp-cat="${esc(c)}">${esc(c)}</button>`).join('')}
+    </div>
+    ${pair ? '<p class="field-help">一对两张，左边那张排前面。换成「普通」的话，已经填的图会自动拆成一张一条。</p>' : ''}` : ''}
 
     ${cfg.perms ? `
     <div class="field-label">标签（可选，最多 ${TAG_MAX} 个）</div>
@@ -7470,6 +7524,10 @@ function drawPostBatch(){
       <div class="perm-row" id="bpOtherRow"><div class="sel-check-inline ${st.otherChecked?'on':''}">${st.otherChecked?CHECK_SVG:''}</div><span class="perm-label">其他</span></div>
     </div>
     ${st.otherChecked ? `<input class="field-input" id="bpOther" placeholder="填写具体说明，例如：转载请注明出处" style="margin-top:8px;" value="${esc(st.otherText)}">` : ''}
+
+    <div class="field-label">来源说明（可选，这一批共用）</div>
+    <input class="field-input" id="bpCredit" placeholder="例如：已获原作者 @xxx 同意分享" value="${esc(st.credit)}">
+    <p class="field-help">出处不同的图分几批发。单独某一条要写别的，发完点进那一条再改。</p>
     ` : ''}
 
     <div class="btn-row" style="margin-top:18px;"><button class="btn-solid" id="bpSubmit">确认发布</button></div>
@@ -7477,7 +7535,7 @@ function drawPostBatch(){
 
   $('bpAdd').addEventListener('click', ()=>{
     syncPostBatch();
-    st.rows.push({ id: uid(), title: '', url: '' });
+    st.rows.push({ id: uid(), title: '', url: '', url2: '' });
     drawPostBatch();
   });
 
@@ -7494,8 +7552,8 @@ function drawPostBatch(){
     if(!good.length){ showToast('没认出任何一条，看看每行里有没有链接'); return; }
     // 末尾那条完全空着的先用掉（刚进来默认就有一条），别在中间留个空行
     const tail = st.rows[st.rows.length-1];
-    if(tail && !tail.title.trim() && !tail.url.trim()) st.rows.pop();
-    good.forEach(x=>st.rows.push({ id: uid(), title: x.desc || '', url: x.url }));
+    if(tail && !tail.title.trim() && !tail.url.trim() && !(tail.url2||'').trim()) st.rows.pop();
+    good.forEach(x=>fillOneUrl(st, pair, x.url, x.desc || ''));
     st.pasteText = ''; st.pasteOpen = false;
     drawPostBatch();
     const bad = parsed.length - good.length;
@@ -7505,13 +7563,13 @@ function drawPostBatch(){
     b.addEventListener('click', ()=>{
       syncPostBatch();
       st.rows = st.rows.filter(r=>r.id !== b.dataset.bpDel);
-      if(!st.rows.length) st.rows.push({ id: uid(), title: '', url: '' });   // 一行都没有的界面没法用
+      if(!st.rows.length) st.rows.push({ id: uid(), title: '', url: '', url2: '' });   // 一行都没有的界面没法用
       drawPostBatch();
     });
   });
-  // 贴完头像框链接就立刻出一张小图，贴错了当场看得出来
-  if(isFrame){
-    $('postEditorBody').querySelectorAll('[data-bp-url]').forEach(inp=>{
+  // 贴完链接就立刻出一张小图，贴错了当场看得出来
+  if(cfg.preview){
+    $('postEditorBody').querySelectorAll('[data-bp-url],[data-bp-url2]').forEach(inp=>{
       inp.addEventListener('change', ()=>{ syncPostBatch(); drawPostBatch(); });
     });
   }
@@ -7523,14 +7581,24 @@ function drawPostBatch(){
     if(!urls.length) return;
     // 末尾那条要是完全空着（刚进来默认就有一条），先用掉它，别在中间留个空行
     const tail = st.rows[st.rows.length-1];
-    if(tail && !tail.title.trim() && !tail.url.trim()) st.rows.pop();
-    urls.forEach(u=>st.rows.push({ id: uid(), title: '', url: u }));
+    if(tail && !tail.title.trim() && !tail.url.trim() && !(tail.url2||'').trim()) st.rows.pop();
+    urls.forEach(u=>fillOneUrl(st, pair, u));
     drawPostBatch();
   });
 
   const catRow = $('bpCatRow');
   if(catRow) catRow.querySelectorAll('[data-bp-cat]').forEach(b=>{
-    b.addEventListener('click', ()=>{ syncPostBatch(); st.category = b.dataset.bpCat; drawPostBatch(); });
+    b.addEventListener('click', ()=>{
+      syncPostBatch();
+      const next = b.dataset.bpCat;
+      // 头像在"一对两张"和"一张一条"之间切，已经填进去的图跟着重新分组，
+      // 不然换个分类就得把所有链接手动挪一遍位置
+      if(st.kind === 'avatar' && isPairCat(next) !== isPairCat(st.category)){
+        regroupAvatarRows(st, isPairCat(next));
+      }
+      st.category = next;
+      drawPostBatch();
+    });
   });
 
   // 字体没有标签和权限那两段，下面这些元素根本不存在，得整块跳过
@@ -7572,13 +7640,17 @@ async function submitPostBatch(){
   const st = batchPost; if(!st) return;
   syncPostBatch();
 
-  // 完全空的行直接忽略：多点了一下「添加一条」不该变成报错
-  const rows = st.rows.filter(r=>r.title.trim() || r.url.trim());
-  if(!rows.length){ showToast('还没有填任何一条'); return; }
-  const bad = rows.findIndex(r=>!r.title.trim() || !r.url.trim());
-  if(bad >= 0){ showToast(`第 ${bad+1} 条的名字和链接都要填`); return; }
-
   const cfg = BATCH_KINDS[st.kind];
+  const pair = st.kind === 'avatar' && isPairCat(st.category);
+
+  // 完全空的行直接忽略：多点了一下「添加一条」不该变成报错
+  const rows = st.rows.filter(r=>r.title.trim() || r.url.trim() || (r.url2||'').trim());
+  if(!rows.length){ showToast('还没有填任何一条'); return; }
+  const bad = rows.findIndex(r=>!r.title.trim() || !r.url.trim() || (pair && !(r.url2||'').trim()));
+  if(bad >= 0){
+    showToast(pair ? `第 ${bad+1} 对要填名字和两张图` : `第 ${bad+1} 条的名字和链接都要填`);
+    return;
+  }
   const payload = cfg.table === 'fonts'
     // 卡片的样式这里一律用新建字体时的那套默认值 —— 跟单条编辑器保持一致，
     // 导进来之后点开某个字体还能单独调
@@ -7593,7 +7665,11 @@ async function submitPostBatch(){
       }))
     : rows.map(r=>({
         kind: st.kind, title: r.title.trim(), url: r.url.trim(),
-        body: '', link: '', credit: '',
+        // 这两列只有头像用得上，别的 kind 一律写空 —— 跟单条编辑器保持一致
+        url2: pair ? r.url2.trim() : null,
+        category: st.kind === 'avatar' ? st.category : null,
+        body: '', link: '',
+        credit: st.credit.trim(),
         tags: st.tags.slice(),
         allow_repost: st.allowRepost,
         allow_edit: st.allowEdit,
@@ -7609,7 +7685,7 @@ async function submitPostBatch(){
 
   $('postEditorOverlay').classList.remove('open');
   batchPost = null;
-  showToast(`已发布 ${payload.length} 条`);
+  showToast(`已发布 ${payload.length} ${pair ? '对' : '条'}`);
   if(cfg.table === 'fonts') await loadFonts(); else await loadPosts();
   renderAll(); showPage('my');
 }
@@ -7622,7 +7698,7 @@ function renderPostKindPick(){
   wrap.querySelectorAll('.post-kind-btn').forEach(b=>{
     b.addEventListener('click', ()=>{
       const k = b.dataset.kind;
-      // 铃声和头像框一条就是「一个名字加一个地址」，做成列表能一次发好几条。
+      // 铃声、头像框、头像一条就是「一个名字加一两个地址」，做成列表能一次发好几条。
       // 教程和指路的正文本身就是内容，列不成表，还走原来那个单条编辑器。
       // 编辑已有的帖子也一律走单条编辑器 —— 批量那套改的是一批，不是某一条。
       if(BATCH_KINDS[k]) openPostBatch(k); else openPostEditor(k, null);
