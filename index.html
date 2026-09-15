@@ -232,6 +232,10 @@
   .post-cover-in svg{width:30px; height:30px; color:var(--text-faint); stroke-width:1.4;}
   .post-cover-in .excerpt{font-size:11px; line-height:1.7; color:var(--text-dim); overflow:hidden; display:-webkit-box; -webkit-line-clamp:5; -webkit-box-orient:vertical;}
   .post-cover-in img{position:absolute; inset:0; width:100%; height:100%; object-fit:contain; padding:10px;}
+  /* 头像是"几张小图摆在正中"，不是整张铺满，得从上面那条绝对定位里摘出来。
+     不摘的话：图被钉在封面左上角，情侣的两张还会整整齐齐叠在一起，
+     看上去只有一张 —— 之前是圆的，圆饼叠圆饼谁也没看出来。 */
+  .post-cover-in img.post-av{position:relative; inset:auto; padding:0;}
   .post-kind-tag{position:absolute; left:6px; top:6px; font-size:9.5px; letter-spacing:.06em; background:var(--ink); color:var(--ink-contrast); border-radius:999px; padding:2px 7px;}
   /* 铃声试听 */
   .ring-row{display:flex; align-items:center; gap:11px; border:1px solid var(--border); border-radius:var(--radius-m); padding:11px 13px; margin-top:12px;}
@@ -3028,11 +3032,13 @@ function postIconSvg(kind){
 function postCoverHtml(pt){
   let inner;
   if(pt.kind === 'avatar' && pt.url){
-    // 头像按圆形显示 —— 方形预览看不出戴上去是什么样。
+    // 方形显示，圆角跟站里其它方缩略图一个值。
+    // 原来是圆的，理由是"圆形更接近戴上去的样子"，但整页看下来一堆圆饼很难看，
+    // 而且跟表情包/字体那些方卡片摆在一起格格不入。
     // 情侣两张并排，一眼就知道这是一对，不用点进去才发现
-    const one = (u, size) => `<img src="${esc(u)}" loading="lazy" referrerpolicy="no-referrer"
+    const one = (u, size) => `<img class="post-av" src="${esc(u)}" loading="lazy" referrerpolicy="no-referrer"
       onerror="this.style.opacity=0"
-      style="width:${size}px; height:${size}px; object-fit:cover; border-radius:50%; background:var(--bg-elev);">`;
+      style="width:${size}px; height:${size}px; object-fit:cover; border-radius:var(--radius-s); background:var(--bg-elev);">`;
     inner = (pt.url2 || '').trim()
       ? `<div style="display:flex; gap:8px; align-items:center; justify-content:center;">${one(pt.url, 56)}${one(pt.url2.trim(), 56)}</div>`
       : one(pt.url, 78);
@@ -6989,7 +6995,7 @@ function renderPostDetail(justToggled){
     const pair = (pt.url2 || '').trim();
     const shot = (u, who) => `<div style="text-align:center;">
       <img src="${esc(u)}" alt="" referrerpolicy="no-referrer" onerror="this.style.opacity=.15"
-        style="width:${pair ? 128 : 172}px; height:${pair ? 128 : 172}px; object-fit:cover; border-radius:50%; background:var(--bg-elev);">
+        style="width:${pair ? 128 : 172}px; height:${pair ? 128 : 172}px; object-fit:cover; border-radius:var(--radius-s); background:var(--bg-elev);">
       ${who ? `<div style="font-size:12px; color:var(--text-dim); margin-top:6px;">${who}</div>` : ''}
     </div>`;
     const urlRow = (label, u, id) => `<div class="field-label">${label}</div>
@@ -7680,8 +7686,8 @@ function openPostEditor(kind, existing){
       const cell = (u, who) => `<div style="text-align:center;">
         ${u.trim()
           ? `<img src="${esc(u.trim())}" alt="" referrerpolicy="no-referrer" onerror="this.style.opacity=.15"
-               style="width:64px; height:64px; object-fit:cover; border-radius:50%; background:var(--bg-elev);">`
-          : `<div style="width:64px; height:64px; border-radius:50%; background:var(--bg-elev); border:1px dashed var(--border);"></div>`}
+               style="width:64px; height:64px; object-fit:cover; border-radius:var(--radius-s); background:var(--bg-elev);">`
+          : `<div style="width:64px; height:64px; border-radius:var(--radius-s); background:var(--bg-elev); border:1px dashed var(--border);"></div>`}
         ${who ? `<div style="font-size:11px; color:var(--text-dim); margin-top:4px;">${who}</div>` : ''}
       </div>`;
       fields = `<div class="field-label">分类</div>
