@@ -446,6 +446,7 @@
   .af-ctl{display:flex; align-items:center; gap:10px; margin-top:12px;}
   .af-ctl label{font-size:11.5px; color:var(--text-dim); flex-shrink:0;}
   .af-ctl input[type=range]{flex:1; accent-color:var(--ink);}
+  .af-ctl .af-val{font-size:11.5px; color:var(--text-faint); flex-shrink:0; min-width:24px; text-align:right; font-variant-numeric:tabular-nums;}
   /* 指路的授权提示：这是法律/礼节问题，必须显眼，不能做成灰色小字 */
   .guide-note{border:1px solid var(--border); border-left:3px solid var(--ink); background:var(--bg-elev); padding:10px 12px; font-size:11.5px; line-height:1.75; color:var(--text-dim); margin-top:12px;}
   .post-body{font-size:13.5px; line-height:1.85; color:var(--text); white-space:pre-wrap; word-break:break-word;}
@@ -3697,6 +3698,7 @@ async function repoAdd(rows){
     if(r.url) seen.add(key);
     fresh.push(Object.assign({
       id: uid()+Date.now().toString(36), source:'mine', type:'emoji', url:'', desc:'', folder:'', pack:'', origin:'',
+      preview:'', previewSize:0, previewLangs:[],
       hasBlob:false, addedAt: Date.now(), fromTitle:'', fromAuthor:'', fromCategory:'', fromTags:[],
     }, r));
   }
@@ -4335,8 +4337,9 @@ function renderRepo(){
 // 一排一模一样的 Aa 等于什么也没说，名字至少还分得开。
 // 本机传进来的字体没有链接，face 只能从 blob 里来，那是异步的：
 // 先留个 data-fontblob 记号，fillRepoFonts 随后把 font-family 补上
+function repoFontSample(it){ return String(it.preview || it.desc || it.fromTitle || 'Aa'); }
 function repoFontMarkHtml(it, cls, max, sizes){
-  const sample = String(it.desc || it.fromTitle || 'Aa').slice(0, max);
+  const sample = repoFontSample(it).slice(0, max);
   const size = sizes[Math.min(sample.length, sizes.length) - 1] || sizes[sizes.length-1];
   const fam = String(it.url||'').trim() ? ensureFontFace({ id: it.id, url: it.url }) : '';
   const mark = fam ? `font-family:'${fam}'; ` : '';
@@ -4675,7 +4678,20 @@ function openRepoAddSheet(){
   });
 }
 
-// 条目详情里的大预览。字体直接拿描述词当样张 —— 比一句「这是个字体」有用得多
+// 字体条目的预览记录。拼成跟站内字体卡一模一样的对象，直接喂给
+// fontCanvasHtml —— 「和发布时一样」就是这个意思：不另写一套渲染，
+// 仓库里看到的和站上看到的是同一个东西
+function repoFontRecord(it, src, st){
+  return {
+    id: it.id, url: src || '',
+    name: it.desc || '字体',
+    display_text: String((st && st.preview) || it.desc || 'Aa').slice(0, 40),
+    bg_color:'#FFFFFF', bg_image:'',
+    font_size: clampNum(st && st.size, 12, 96, 40), letter_spacing: 0, text_align:'center',
+    languages: (st && st.langs) || [], custom_blocks: [],
+  };
+}
+// 条目详情里的大预览。字体走上面那张卡，这里只管图和音频
 function repoPreviewHtml(it){
   const k = repoFileKind(it);
   if(k === 'font'){
@@ -4690,18 +4706,39 @@ function repoPreviewHtml(it){
           <img id="riImg" src="${it.hasBlob?'':esc(it.url)}" alt="" referrerpolicy="no-referrer" style="max-width:160px; max-height:160px; border-radius:var(--radius-s);" onerror="this.style.opacity=0">
         </div>`;
 }
-function openRepoItemSheet(it){
+async function openRepoItemSheet(it){
   let desc = it.desc || '';
   let origin = it.origin || '';
+  const isFont = repoFileKind(it) === 'font';
+  let preview = it.preview || '';
+  let pvSize = clampNum(it.previewSize, 12, 96, 40);
+  let pvLangs = asArray(it.previewLangs).filter(k=>Object.prototype.hasOwnProperty.call(LANG_SAMPLES, String(k)));
+  // 本机传进来的字体没有链接，地址得从 blob 现取，而那是异步的。
+  // 先按没有地址画一遍（字还在，只是用默认字体），取到了再画一遍 ——
+  // 比让人对着空面板等半秒强
+  let srcUrl = String(it.url||'').trim();
   $('repoSheetMask').classList.add('open');
   draw();
+  if(isFont && !srcUrl && it.hasBlob){
+    const u = await repoBlobUrl(it.id);
+    if(u && $('repoSheetMask').classList.contains('open')){ srcUrl = u; draw(); }
+  }
+  function fontStageHtml(){
+    return fontCanvasHtml(repoFontRecord(it, srcUrl, { preview, size:pvSize, langs:pvLangs }), false);
+  }
   function draw(){
     $('repoSheetBox').innerHTML = `
       <div class="sheet-head"><span class="t">${it.source==='site'?'站内下载':'自己整理'} · ${repoTypeLabel(it)}</span><button class="icon-btn" id="riClose"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button></div>
       <div class="sheet-scroll">
-        ${repoPreviewHtml(it)}
+        ${isFont ? `<div class="font-card-stage" id="riFontStage">${fontStageHtml()}</div>` : repoPreviewHtml(it)}
         ${it.fromTitle ? `<p class="hint" style="margin-top:0;">来自《${esc(it.fromTitle)}》${it.fromAuthor?` · ${esc(it.fromAuthor)}`:''}${it.fromCategory?` · ${esc(it.fromCategory)}`:''}</p>` : ''}
         ${asArray(it.fromTags).length ? tagRowHtml(it.fromTags) : ''}
+        ${isFont ? `<div class="field-label"${it.fromTitle?'':' style="margin-top:0;"'}>预览词</div>
+        <input class="field-input" id="riPreview" maxlength="40" value="${esc(preview)}" placeholder="想看什么就打什么，留空用描述词">
+        <div class="chip-row" style="margin-top:8px;">${Object.keys(LANG_SAMPLES)
+          .map(k=>`<button class="chip ${pvLangs.includes(k)?'active':''}" data-lang="${esc(k)}">${esc(LANG_SAMPLES[k].label)}</button>`).join('')}</div>
+        <p class="field-help">选中的语言会在上面多一行对照样张，方便看这款字体缺不缺字。</p>
+        <div class="af-ctl" style="margin-bottom:4px;"><label>字号</label><input type="range" id="riPvSize" min="12" max="96" step="2" value="${pvSize}"><span class="af-val" id="riPvSizeVal">${pvSize}</span></div>` : ''}
         <div class="field-label" style="margin-top:0;">描述</div>
         <input class="field-input" id="riDesc" maxlength="20" value="${esc(desc)}" placeholder="填写描述词">
         <div class="field-label">来源（可选）</div>
@@ -4725,6 +4762,25 @@ function openRepoItemSheet(it){
         <div style="height:16px;"></div>
       </div>`;
     if(it.hasBlob) fillRepoBlobs($('repoSheetBox').parentElement || document);
+    // 预览词改一个字就重画那张卡。只换卡不重画整块面板 ——
+    // 重画会把光标顶出输入框，打三个字要重新点三次
+    const restage = ()=>{ const st=$('riFontStage'); if(st) st.innerHTML = fontStageHtml(); };
+    const pvIn = $('riPreview');
+    if(pvIn) pvIn.addEventListener('input', e=>{ preview = e.target.value; restage(); });
+    const pvSz = $('riPvSize');
+    if(pvSz) pvSz.addEventListener('input', e=>{
+      pvSize = clampNum(e.target.value, 12, 96, 40);
+      const v = $('riPvSizeVal'); if(v) v.textContent = pvSize;
+      restage();
+    });
+    $('repoSheetBox').querySelectorAll('[data-lang]').forEach(b=>{
+      b.addEventListener('click', ()=>{
+        const k = b.dataset.lang;
+        pvLangs = pvLangs.includes(k) ? pvLangs.filter(x=>x!==k) : pvLangs.concat([k]);
+        b.classList.toggle('active');
+        restage();
+      });
+    });
     if(it.hasBlob) repoGetBlob(it.id).then(b=>{ if(b && $('riImg')) $('riImg').src = URL.createObjectURL(b); });
     $('riClose').addEventListener('click', ()=>$('repoSheetMask').classList.remove('open'));
     $('riDesc').addEventListener('input', e=>{ desc = e.target.value; });
@@ -4736,6 +4792,7 @@ function openRepoItemSheet(it){
       b.addEventListener('click', async ()=>{
         const dEl = $('riDesc'); if(dEl) desc = dEl.value;
         const oEl = $('riOrigin'); if(oEl) origin = oEl.value;
+        const vEl = $('riPreview'); if(vEl) preview = vEl.value;
         const pEl = $('riPack'); if(pEl) it.pack = pEl.value.trim().slice(0,20);
         await repoUpdate(it.id, { folder: b.dataset.to, pack: it.pack||'' }); draw(); renderRepo();
       });
@@ -4747,9 +4804,11 @@ function openRepoItemSheet(it){
     $('riSave').addEventListener('click', async ()=>{
       const dEl = $('riDesc'); if(dEl) desc = dEl.value;
       const oEl = $('riOrigin'); if(oEl) origin = oEl.value;
+      const vEl = $('riPreview'); if(vEl) preview = vEl.value;
       const pEl = $('riPack');
-      await repoUpdate(it.id, { desc: desc.trim(), origin: origin.trim(),
-        pack: pEl ? pEl.value.trim().slice(0,20) : (it.pack||'') });
+      await repoUpdate(it.id, Object.assign({ desc: desc.trim(), origin: origin.trim(),
+        pack: pEl ? pEl.value.trim().slice(0,20) : (it.pack||'') },
+        isFont ? { preview: preview.trim().slice(0,40), previewSize: pvSize, previewLangs: pvLangs.slice() } : {}));
       $('repoSheetMask').classList.remove('open'); showToast('已保存'); renderRepo();
     });
     $('riDel').addEventListener('click', async ()=>{
