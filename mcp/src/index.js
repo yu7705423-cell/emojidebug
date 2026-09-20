@@ -793,12 +793,26 @@ const GEN_PAIR_RE = /情头|情侣|couple|matching|cp头像/i;
 const GEN_LEFT_RE = /左|第一张|男生?头像|male/i;
 const GEN_RIGHT_RE = /右|第二张|另一张|另一半|女生?头像|female/i;
 function genWantsPair(prompt) { return GEN_PAIR_RE.test(String(prompt || '')); }
-// 返回 '' 表示没指定 —— 那就整对一起给
+// 返回 '' 表示没指定 —— 那就整对一起给。
+// 只有在「确实要情头」的时候才认方位词：不加这道门的话，
+// 单要一张「男生头像」会被当成"要左半边"，而且下面还会把「男生头像」
+// 整个当方位词摘掉，搜索词就空了
 function genSide(prompt) {
   const p = String(prompt || '');
+  if (!genWantsPair(p)) return '';
   if (GEN_RIGHT_RE.test(p)) return 'right';
   if (GEN_LEFT_RE.test(p)) return 'left';
   return '';
+}
+// 方位词必须在「进搜索之前」就摘掉，不能只靠 GEN_JUNK。
+// genTerms 的第一个候选是整句原文，"情头 左" 会原样拿去搜 —— GEN_JUNK 只在
+// 后面的分词阶段起作用，拦不住整句这一步。更要命的是「情头 左」和「情头 右」
+// 因此算出两个不同的 key，定死地选也就选到了两对不同的情头
+const GEN_SIDE_STRIP = /(左边|右边|左侧|右侧|第一张|第二张|另一张|另一半|男生?头像|女生?头像|male|female|[左右])/gi;
+function genBase(prompt) {
+  const p = String(prompt || '');
+  if (!genWantsPair(p)) return p;
+  return p.replace(GEN_SIDE_STRIP, ' ').replace(/\s+/g, ' ').trim();
 }
 // 把挑中的条目摊成一张张具体的图。
 // 情侣头像在库里是一条记录两个链接，摊开的时候绝不能只取 url 就完事 ——
@@ -975,6 +989,29 @@ async function genFind(env, token, prompt) {
 
 // 从候选里随机挑不重复的几张。随机是故意的 ——
 // 同一个词每次都给同一张，聊几轮就穿帮了
+// 分两次要左右半边的时候，两次必须落在同一对上。随机挑的话，第一次拿 A 的左边、
+// 第二次拿 B 的右边，凑出来根本不是一套 —— 这是「一次只能显示一张」的前端唯一
+// 能用的路子，不能让它出这种错。
+//
+// 所以：指定了左右就定死地选，同样的提示词必然挑中同样那一对。
+// 没指定左右时照旧随机 —— 那种情况两张一起给，不存在配对问题，
+// 随机反而能让每次要到的情头不一样。
+//
+// 排序不能靠数据库的返回顺序：那个没承诺过稳定，翻一次页就可能变。
+// 按链接排一遍，顺序就跟返回顺序无关了。
+function genHash(str) {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return h >>> 0;
+}
+function genPickStable(list, prompt) {
+  const pool = (list || []).slice().sort((a, b) => String(a.url).localeCompare(String(b.url)));
+  if (!pool.length) return [];
+  // genTerms 已经把「左」「右」这些方位词剔掉了，所以「情头 左」和「情头 右」
+  // 算出来的 key 是同一个 —— 这正是两次能对上的原因
+  const key = String(prompt || '').trim().toLowerCase() || 'yoww';
+  return [pool[genHash(key) % pool.length]];
+}
 function genPick(list, n) {
   const pool = (list || []).slice();
   const out = [];
@@ -1037,15 +1074,18 @@ async function genOpenAI(env, token, req, url, cors, ctx) {
   const prompt = genPrompt(body, url);
   const n = Math.min(Math.max(parseInt(body.n, 10) || 1, 1), 4);
 
-  const found = await genFind(env, token, prompt);
+  // 先把「左/右」这类方位词摘掉再去搜，否则整句会被原样拿去查标题
+  const side = genSide(prompt);
+  const base = genBase(prompt);
+  const found = await genFind(env, token, base);
   if (!found.ok) {
     return json({ error: { message: found.error, type: 'invalid_request_error' } }, 400, {}, cors);
   }
-  // 情侣头像一对两张，得按「对」来算要挑几条记录
-  const side = genSide(prompt);
   const whole = found.pairMode && !side;
   const need = whole ? Math.max(2, n) : n;
-  const shots = genFlatten(genPick(found.list, whole ? Math.ceil(need / 2) : need), need, side, whole);
+  const shots = genFlatten(
+    side ? genPickStable(found.list, base) : genPick(found.list, whole ? Math.ceil(need / 2) : need),
+    need, side, whole);
   const wantB64 = body.response_format !== 'url';
 
   const data = [];
@@ -1069,14 +1109,17 @@ async function genSD(env, token, req, url, cors) {
   const prompt = genPrompt(body, url);
   const n = Math.min(Math.max(parseInt(body.batch_size, 10) || parseInt(body.n_iter, 10) || 1, 1), 4);
 
-  const found = await genFind(env, token, prompt);
+  const side = genSide(prompt);
+  const base = genBase(prompt);
+  const found = await genFind(env, token, base);
   if (!found.ok) return json({ error: found.error, detail: found.error }, 400, {}, cors);
 
-  const side = genSide(prompt);
   const whole = found.pairMode && !side;
   const need = whole ? Math.max(2, n) : n;
   const images = [];
-  for (const p of genFlatten(genPick(found.list, whole ? Math.ceil(need / 2) : need), need, side, whole)) {
+  for (const p of genFlatten(
+    side ? genPickStable(found.list, base) : genPick(found.list, whole ? Math.ceil(need / 2) : need),
+    need, side, whole)) {
     const bytes = await genBytes(p.url);
     if (bytes) images.push(bytes.b64);
   }
@@ -1096,14 +1139,16 @@ async function genDirect(env, token, req, url, seg, cors) {
     try { prompt = decodeURIComponent(seg.slice(1).join('/')); } catch (e) { prompt = seg.slice(1).join('/'); }
     prompt = prompt.replace(/\.(png|jpe?g|gif|webp)$/i, '');
   }
-  const found = await genFind(env, token, prompt);
-  if (!found.ok) return new Response(found.error, { status: 400, headers: cors });
-  const pick = genPick(found.list, 1)[0];
-  if (!pick) return new Response('没挑到图', { status: 404, headers: cors });
   // 这个入口是 302 到一张图，结构上没法一次给两张。
   // 情侣头像就靠提示词挑边：「情头 左」/「情头 右」，地址上加 ?side=right 也行。
-  // 都没说就给左边那张，另一半让他换个词再要一次
-  const side = genSide(prompt) || (url.searchParams.get('side') || '').toLowerCase();
+  // 挑边的时候必须定死地选，否则两次要到的是两对不同的情头
+  const qSide = (url.searchParams.get('side') || '').toLowerCase();
+  const side = genSide(prompt) || (genWantsPair(prompt) && /^(left|right)$/.test(qSide) ? qSide : '');
+  const base = genBase(prompt);
+  const found = await genFind(env, token, base);
+  if (!found.ok) return new Response(found.error, { status: 400, headers: cors });
+  const pick = (side ? genPickStable(found.list, base) : genPick(found.list, 1))[0];
+  if (!pick) return new Response('没挑到图', { status: 404, headers: cors });
   const shot = genFlatten([pick], 1, side === 'right' ? 'right' : 'left', false)[0] || pick;
   const link = await proxyUrl(env, shot.url, url.origin);
   return new Response(null, {
