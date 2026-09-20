@@ -18,7 +18,7 @@ const NAME = 'yoww';
 // 每次改动都往上加一。线上到底跑的是不是最新的，
 // 打开 /health 看这个数字就知道 —— Cloudflare 后台显示的是它自己的版本号，
 // 跟提交号对不上，别拿那个判断。
-const VERSION = '22';
+const VERSION = '23';
 const SITE = 'https://yoww2026.cn';
 
 // 我们支持的协议版本，新的排前面。客户端报的版本认识就照它的来，
@@ -782,7 +782,46 @@ const GEN_JUNK = new Set([
   'a', 'an', 'the', 'of', 'in', 'on', 'with', 'and', 'or', 'is', 'to', 'for',
   '表情包', '表情', '一张', '一个', '图片', '图', '发个', '来个', '生成', '画', '绘制',
   '高清', '可爱', '风格', '请', '帮我',
+  // 方位词是用来挑情侣头像哪一半的，不是搜索词。
+  // 不剔掉的话「情头 右」会拿「右」去搜标题，什么也搜不到
+  '左', '右', '左边', '右边', '第一张', '第二张', '另一张', '另一半', '一对', '两张',
 ]);
+
+// 前端能塞给我们的只有一串提示词 —— 没有额外参数可用。
+// 所以「要情侣头像」和「要哪一半」都得从提示词里读出来
+const GEN_PAIR_RE = /情头|情侣|couple|matching|cp头像/i;
+const GEN_LEFT_RE = /左|第一张|男生?头像|male/i;
+const GEN_RIGHT_RE = /右|第二张|另一张|另一半|女生?头像|female/i;
+function genWantsPair(prompt) { return GEN_PAIR_RE.test(String(prompt || '')); }
+// 返回 '' 表示没指定 —— 那就整对一起给
+function genSide(prompt) {
+  const p = String(prompt || '');
+  if (GEN_RIGHT_RE.test(p)) return 'right';
+  if (GEN_LEFT_RE.test(p)) return 'left';
+  return '';
+}
+// 把挑中的条目摊成一张张具体的图。
+// 情侣头像在库里是一条记录两个链接，摊开的时候绝不能只取 url 就完事 ——
+// 只给左边那张，对面那个人就没得用了，等于这次请求白跑
+// expand 只在「用户点名要情头」时才为真。
+// 普通「来个头像」也可能搜到情侣记录 —— 那种情况下摊成两张是错的：
+// 人家要一个头像，不该塞给他一对情头
+function genFlatten(picks, want, side, expand) {
+  const out = [];
+  for (const p of picks || []) {
+    if (out.length >= want) break;
+    if (!(p.pair && p.url2)) { out.push({ desc: p.desc, url: p.url }); continue; }
+    const label = oneLine(p.desc) || '情侣头像';
+    if (side === 'right')    out.push({ desc: label + '（右）', url: p.url2 });
+    else if (side || !expand) out.push({ desc: label + '（左）', url: p.url });
+    else {
+      // 一对不拆。宁可比 n 多给一张，也不能只给半边
+      out.push({ desc: label + '（左）', url: p.url });
+      out.push({ desc: label + '（右）', url: p.url2 });
+    }
+  }
+  return out;
+}
 
 // 「一只很生气」这种，前面的量词和程度词全是白搭的 ——
 // 描述词库里存的是「生气」，带着前缀一个字都搜不着。
@@ -876,14 +915,45 @@ async function genFind(env, token, prompt) {
   // 提示词里点名要头像，就去头像库。注意这是"用户/角色想换头像"的场景，
   // 跟发表情是两回事，搜错库子返回的东西完全用不了
   if (/头像|情头|avatar|profile\s*pic/i.test(String(prompt || '')) && allow.includes('avatar')) {
-    for (const t of terms.concat([''])) {
-      const r = await rpc(env, 'mcp_search_avatars', {
-        p_token: token, p_query: t, p_category: '', p_limit: 20,
-      });
-      if (r.ok && (r.avatars || []).length) {
-        return { ok: true, term: t, kind: 'avatar',
-                 list: r.avatars.map(a => ({ desc: a.title || '头像', url: a.url })) };
+    const wantPair = genWantsPair(prompt);
+    // 点名要情头就只在「情侣」这一类里找。不限分类的话，搜出来很可能是
+    // 一个单人头像 —— 对方拿不到配对的那张，等于没解决问题
+    const cats = wantPair ? ['情侣', ''] : [''];
+    for (const cat of cats) {
+      for (const t of terms.concat([''])) {
+        const r = await rpc(env, 'mcp_search_avatars', {
+          p_token: token, p_query: t, p_category: cat, p_limit: 20,
+        });
+        if (r.ok && (r.avatars || []).length) {
+          const list = r.avatars.map(a => ({
+            desc: a.title || '头像',
+            url: a.url,
+            url2: a.url2 || '',
+            pair: !!(a.is_pair && a.url2),
+          }));
+          // 要情头的时候，只留真的成对的那些；一条都没有再放宽
+          const pairs = list.filter(x => x.pair);
+          if (wantPair && pairs.length) {
+            return { ok: true, term: t, kind: 'avatar', pairMode: true, list: pairs };
+          }
+          if (!wantPair) {
+            // 不限分类搜出来的结果里混着情侣记录。要单人头像就先挑真正的单人，
+            // 实在一个都没有才退回用情侣记录里的一张
+            const solos = list.filter(x => !x.pair);
+            return { ok: true, term: t, kind: 'avatar', pairMode: false,
+                     list: solos.length ? solos : list };
+          }
+        }
       }
+    }
+    // 找遍了也没有成对的，退回随便给一个头像，总比报错强
+    const r = await rpc(env, 'mcp_search_avatars', {
+      p_token: token, p_query: '', p_category: '', p_limit: 20,
+    });
+    if (r.ok && (r.avatars || []).length) {
+      return { ok: true, term: '', kind: 'avatar', pairMode: false,
+               list: r.avatars.map(a => ({ desc: a.title || '头像', url: a.url,
+                                           url2: a.url2 || '', pair: !!(a.is_pair && a.url2) })) };
     }
   }
 
@@ -971,11 +1041,15 @@ async function genOpenAI(env, token, req, url, cors, ctx) {
   if (!found.ok) {
     return json({ error: { message: found.error, type: 'invalid_request_error' } }, 400, {}, cors);
   }
-  const picks = genPick(found.list, n);
+  // 情侣头像一对两张，得按「对」来算要挑几条记录
+  const side = genSide(prompt);
+  const whole = found.pairMode && !side;
+  const need = whole ? Math.max(2, n) : n;
+  const shots = genFlatten(genPick(found.list, whole ? Math.ceil(need / 2) : need), need, side, whole);
   const wantB64 = body.response_format !== 'url';
 
   const data = [];
-  for (const p of picks) {
+  for (const p of shots) {
     const link = await proxyUrl(env, p.url, url.origin);
     warm(env, ctx, [p.url]);
     const item = { url: link, revised_prompt: oneLine(p.desc) || prompt };
@@ -998,8 +1072,11 @@ async function genSD(env, token, req, url, cors) {
   const found = await genFind(env, token, prompt);
   if (!found.ok) return json({ error: found.error, detail: found.error }, 400, {}, cors);
 
+  const side = genSide(prompt);
+  const whole = found.pairMode && !side;
+  const need = whole ? Math.max(2, n) : n;
   const images = [];
-  for (const p of genPick(found.list, n)) {
+  for (const p of genFlatten(genPick(found.list, whole ? Math.ceil(need / 2) : need), need, side, whole)) {
     const bytes = await genBytes(p.url);
     if (bytes) images.push(bytes.b64);
   }
@@ -1023,7 +1100,12 @@ async function genDirect(env, token, req, url, seg, cors) {
   if (!found.ok) return new Response(found.error, { status: 400, headers: cors });
   const pick = genPick(found.list, 1)[0];
   if (!pick) return new Response('没挑到图', { status: 404, headers: cors });
-  const link = await proxyUrl(env, pick.url, url.origin);
+  // 这个入口是 302 到一张图，结构上没法一次给两张。
+  // 情侣头像就靠提示词挑边：「情头 左」/「情头 右」，地址上加 ?side=right 也行。
+  // 都没说就给左边那张，另一半让他换个词再要一次
+  const side = genSide(prompt) || (url.searchParams.get('side') || '').toLowerCase();
+  const shot = genFlatten([pick], 1, side === 'right' ? 'right' : 'left', false)[0] || pick;
+  const link = await proxyUrl(env, shot.url, url.origin);
   return new Response(null, {
     status: 302,
     headers: Object.assign({ location: link, 'cache-control': 'no-store' }, cors),
